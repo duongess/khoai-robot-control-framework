@@ -43,3 +43,13 @@ class TrainBatchResponse(_message.Message):
     samples_seen: int
     policy_version: str
     def __init__(self, accepted: _Optional[bool] = ..., samples_seen: _Optional[int] = ..., policy_version: _Optional[str] = ...) -> None: ...
+
+class HealthCheckRequest(_message.Message):
+    __slots__ = ()
+    def __init__(self) -> None: ...
+
+class HealthCheckResponse(_message.Message):
+    __slots__ = ("ready",)
+    READY_FIELD_NUMBER: _ClassVar[int]
+    ready: bool
+    def __init__(self, ready: _Optional[bool] = ...) -> None: ...

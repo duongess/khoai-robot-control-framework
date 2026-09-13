@@ -44,6 +44,11 @@ class LearnerServiceStub:
                 request_serializer=learner_dot_v1_dot_learner__pb2.TrainBatchRequest.SerializeToString,
                 response_deserializer=learner_dot_v1_dot_learner__pb2.TrainBatchResponse.FromString,
                 _registered_method=True)
+        self.HealthCheck = channel.unary_unary(
+                '/learner.v1.LearnerService/HealthCheck',
+                request_serializer=learner_dot_v1_dot_learner__pb2.HealthCheckRequest.SerializeToString,
+                response_deserializer=learner_dot_v1_dot_learner__pb2.HealthCheckResponse.FromString,
+                _registered_method=True)
 
 
 class LearnerServiceServicer:
@@ -61,6 +66,12 @@ class LearnerServiceServicer:
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def HealthCheck(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_LearnerServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -73,6 +84,11 @@ def add_LearnerServiceServicer_to_server(servicer, server):
                     servicer.TrainBatch,
                     request_deserializer=learner_dot_v1_dot_learner__pb2.TrainBatchRequest.FromString,
                     response_serializer=learner_dot_v1_dot_learner__pb2.TrainBatchResponse.SerializeToString,
+            ),
+            'HealthCheck': grpc.unary_unary_rpc_method_handler(
+                    servicer.HealthCheck,
+                    request_deserializer=learner_dot_v1_dot_learner__pb2.HealthCheckRequest.FromString,
+                    response_serializer=learner_dot_v1_dot_learner__pb2.HealthCheckResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -129,6 +145,33 @@ class LearnerService:
             '/learner.v1.LearnerService/TrainBatch',
             learner_dot_v1_dot_learner__pb2.TrainBatchRequest.SerializeToString,
             learner_dot_v1_dot_learner__pb2.TrainBatchResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def HealthCheck(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/learner.v1.LearnerService/HealthCheck',
+            learner_dot_v1_dot_learner__pb2.HealthCheckRequest.SerializeToString,
+            learner_dot_v1_dot_learner__pb2.HealthCheckResponse.FromString,
             options,
             channel_credentials,
             insecure,

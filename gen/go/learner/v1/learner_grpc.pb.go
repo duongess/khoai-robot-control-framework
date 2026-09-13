@@ -21,6 +21,7 @@ const _ = grpc.SupportPackageIsVersion9
 const (
 	LearnerService_PredictBatch_FullMethodName = "/learner.v1.LearnerService/PredictBatch"
 	LearnerService_TrainBatch_FullMethodName   = "/learner.v1.LearnerService/TrainBatch"
+	LearnerService_HealthCheck_FullMethodName  = "/learner.v1.LearnerService/HealthCheck"
 )
 
 // LearnerServiceClient is the client API for LearnerService service.
@@ -29,6 +30,7 @@ const (
 type LearnerServiceClient interface {
 	PredictBatch(ctx context.Context, in *PredictBatchRequest, opts ...grpc.CallOption) (*PredictBatchResponse, error)
 	TrainBatch(ctx context.Context, in *TrainBatchRequest, opts ...grpc.CallOption) (*TrainBatchResponse, error)
+	HealthCheck(ctx context.Context, in *HealthCheckRequest, opts ...grpc.CallOption) (*HealthCheckResponse, error)
 }
 
 type learnerServiceClient struct {
@@ -59,12 +61,23 @@ func (c *learnerServiceClient) TrainBatch(ctx context.Context, in *TrainBatchReq
 	return out, nil
 }
 
+func (c *learnerServiceClient) HealthCheck(ctx context.Context, in *HealthCheckRequest, opts ...grpc.CallOption) (*HealthCheckResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(HealthCheckResponse)
+	err := c.cc.Invoke(ctx, LearnerService_HealthCheck_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // LearnerServiceServer is the server API for LearnerService service.
 // All implementations must embed UnimplementedLearnerServiceServer
 // for forward compatibility.
 type LearnerServiceServer interface {
 	PredictBatch(context.Context, *PredictBatchRequest) (*PredictBatchResponse, error)
 	TrainBatch(context.Context, *TrainBatchRequest) (*TrainBatchResponse, error)
+	HealthCheck(context.Context, *HealthCheckRequest) (*HealthCheckResponse, error)
 	mustEmbedUnimplementedLearnerServiceServer()
 }
 
@@ -80,6 +93,9 @@ func (UnimplementedLearnerServiceServer) PredictBatch(context.Context, *PredictB
 }
 func (UnimplementedLearnerServiceServer) TrainBatch(context.Context, *TrainBatchRequest) (*TrainBatchResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method TrainBatch not implemented")
+}
+func (UnimplementedLearnerServiceServer) HealthCheck(context.Context, *HealthCheckRequest) (*HealthCheckResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method HealthCheck not implemented")
 }
 func (UnimplementedLearnerServiceServer) mustEmbedUnimplementedLearnerServiceServer() {}
 func (UnimplementedLearnerServiceServer) testEmbeddedByValue()                        {}
@@ -138,6 +154,24 @@ func _LearnerService_TrainBatch_Handler(srv interface{}, ctx context.Context, de
 	return interceptor(ctx, in, info, handler)
 }
 
+func _LearnerService_HealthCheck_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(HealthCheckRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(LearnerServiceServer).HealthCheck(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: LearnerService_HealthCheck_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(LearnerServiceServer).HealthCheck(ctx, req.(*HealthCheckRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // LearnerService_ServiceDesc is the grpc.ServiceDesc for LearnerService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -152,6 +186,10 @@ var LearnerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "TrainBatch",
 			Handler:    _LearnerService_TrainBatch_Handler,
+		},
+		{
+			MethodName: "HealthCheck",
+			Handler:    _LearnerService_HealthCheck_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

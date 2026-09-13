@@ -1,3 +1,4 @@
 #!/usr/bin/env bash
 set -euo pipefail
-python -m ai.swarmdex_ai.server.main
+
+PYTHONPATH=ai/generated poetry run python -m ai.grpc_server

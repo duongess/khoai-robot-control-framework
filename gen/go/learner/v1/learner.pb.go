@@ -245,6 +245,86 @@ func (x *TrainBatchResponse) GetPolicyVersion() string {
 	return ""
 }
 
+type HealthCheckRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *HealthCheckRequest) Reset() {
+	*x = HealthCheckRequest{}
+	mi := &file_learner_v1_learner_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *HealthCheckRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*HealthCheckRequest) ProtoMessage() {}
+
+func (x *HealthCheckRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_learner_v1_learner_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use HealthCheckRequest.ProtoReflect.Descriptor instead.
+func (*HealthCheckRequest) Descriptor() ([]byte, []int) {
+	return file_learner_v1_learner_proto_rawDescGZIP(), []int{4}
+}
+
+type HealthCheckResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Ready         bool                   `protobuf:"varint,1,opt,name=ready,proto3" json:"ready,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *HealthCheckResponse) Reset() {
+	*x = HealthCheckResponse{}
+	mi := &file_learner_v1_learner_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *HealthCheckResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*HealthCheckResponse) ProtoMessage() {}
+
+func (x *HealthCheckResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_learner_v1_learner_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use HealthCheckResponse.ProtoReflect.Descriptor instead.
+func (*HealthCheckResponse) Descriptor() ([]byte, []int) {
+	return file_learner_v1_learner_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *HealthCheckResponse) GetReady() bool {
+	if x != nil {
+		return x.Ready
+	}
+	return false
+}
+
 var File_learner_v1_learner_proto protoreflect.FileDescriptor
 
 const file_learner_v1_learner_proto_rawDesc = "" +
@@ -264,11 +344,15 @@ const file_learner_v1_learner_proto_rawDesc = "" +
 	"\x12TrainBatchResponse\x12\x1a\n" +
 	"\baccepted\x18\x01 \x01(\bR\baccepted\x12!\n" +
 	"\fsamples_seen\x18\x02 \x01(\x04R\vsamplesSeen\x12%\n" +
-	"\x0epolicy_version\x18\x03 \x01(\tR\rpolicyVersion2\xb0\x01\n" +
+	"\x0epolicy_version\x18\x03 \x01(\tR\rpolicyVersion\"\x14\n" +
+	"\x12HealthCheckRequest\"+\n" +
+	"\x13HealthCheckResponse\x12\x14\n" +
+	"\x05ready\x18\x01 \x01(\bR\x05ready2\x80\x02\n" +
 	"\x0eLearnerService\x12Q\n" +
 	"\fPredictBatch\x12\x1f.learner.v1.PredictBatchRequest\x1a .learner.v1.PredictBatchResponse\x12K\n" +
 	"\n" +
-	"TrainBatch\x12\x1d.learner.v1.TrainBatchRequest\x1a\x1e.learner.v1.TrainBatchResponseBOZMgithub.com/duongess/khoai-robot-control-framework/gen/go/learner/v1;learnerv1b\x06proto3"
+	"TrainBatch\x12\x1d.learner.v1.TrainBatchRequest\x1a\x1e.learner.v1.TrainBatchResponse\x12N\n" +
+	"\vHealthCheck\x12\x1e.learner.v1.HealthCheckRequest\x1a\x1f.learner.v1.HealthCheckResponseBOZMgithub.com/duongess/khoai-robot-control-framework/gen/go/learner/v1;learnerv1b\x06proto3"
 
 var (
 	file_learner_v1_learner_proto_rawDescOnce sync.Once
@@ -282,28 +366,32 @@ func file_learner_v1_learner_proto_rawDescGZIP() []byte {
 	return file_learner_v1_learner_proto_rawDescData
 }
 
-var file_learner_v1_learner_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
+var file_learner_v1_learner_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
 var file_learner_v1_learner_proto_goTypes = []any{
 	(*PredictBatchRequest)(nil),   // 0: learner.v1.PredictBatchRequest
 	(*PredictBatchResponse)(nil),  // 1: learner.v1.PredictBatchResponse
 	(*TrainBatchRequest)(nil),     // 2: learner.v1.TrainBatchRequest
 	(*TrainBatchResponse)(nil),    // 3: learner.v1.TrainBatchResponse
-	(*EnvironmentDescriptor)(nil), // 4: learner.v1.EnvironmentDescriptor
-	(*State)(nil),                 // 5: learner.v1.State
-	(*Action)(nil),                // 6: learner.v1.Action
-	(*TransitionBatch)(nil),       // 7: learner.v1.TransitionBatch
+	(*HealthCheckRequest)(nil),    // 4: learner.v1.HealthCheckRequest
+	(*HealthCheckResponse)(nil),   // 5: learner.v1.HealthCheckResponse
+	(*EnvironmentDescriptor)(nil), // 6: learner.v1.EnvironmentDescriptor
+	(*State)(nil),                 // 7: learner.v1.State
+	(*Action)(nil),                // 8: learner.v1.Action
+	(*TransitionBatch)(nil),       // 9: learner.v1.TransitionBatch
 }
 var file_learner_v1_learner_proto_depIdxs = []int32{
-	4, // 0: learner.v1.PredictBatchRequest.environment:type_name -> learner.v1.EnvironmentDescriptor
-	5, // 1: learner.v1.PredictBatchRequest.states:type_name -> learner.v1.State
-	6, // 2: learner.v1.PredictBatchResponse.actions:type_name -> learner.v1.Action
-	7, // 3: learner.v1.TrainBatchRequest.batch:type_name -> learner.v1.TransitionBatch
+	6, // 0: learner.v1.PredictBatchRequest.environment:type_name -> learner.v1.EnvironmentDescriptor
+	7, // 1: learner.v1.PredictBatchRequest.states:type_name -> learner.v1.State
+	8, // 2: learner.v1.PredictBatchResponse.actions:type_name -> learner.v1.Action
+	9, // 3: learner.v1.TrainBatchRequest.batch:type_name -> learner.v1.TransitionBatch
 	0, // 4: learner.v1.LearnerService.PredictBatch:input_type -> learner.v1.PredictBatchRequest
 	2, // 5: learner.v1.LearnerService.TrainBatch:input_type -> learner.v1.TrainBatchRequest
-	1, // 6: learner.v1.LearnerService.PredictBatch:output_type -> learner.v1.PredictBatchResponse
-	3, // 7: learner.v1.LearnerService.TrainBatch:output_type -> learner.v1.TrainBatchResponse
-	6, // [6:8] is the sub-list for method output_type
-	4, // [4:6] is the sub-list for method input_type
+	4, // 6: learner.v1.LearnerService.HealthCheck:input_type -> learner.v1.HealthCheckRequest
+	1, // 7: learner.v1.LearnerService.PredictBatch:output_type -> learner.v1.PredictBatchResponse
+	3, // 8: learner.v1.LearnerService.TrainBatch:output_type -> learner.v1.TrainBatchResponse
+	5, // 9: learner.v1.LearnerService.HealthCheck:output_type -> learner.v1.HealthCheckResponse
+	7, // [7:10] is the sub-list for method output_type
+	4, // [4:7] is the sub-list for method input_type
 	4, // [4:4] is the sub-list for extension type_name
 	4, // [4:4] is the sub-list for extension extendee
 	0, // [0:4] is the sub-list for field type_name
@@ -322,7 +410,7 @@ func file_learner_v1_learner_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_learner_v1_learner_proto_rawDesc), len(file_learner_v1_learner_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   4,
+			NumMessages:   6,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

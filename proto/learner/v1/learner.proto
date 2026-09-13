@@ -29,7 +29,14 @@ message TrainBatchResponse {
   string policy_version = 3;
 }
 
+message HealthCheckRequest {}
+
+message HealthCheckResponse {
+  bool ready = 1;
+}
+
 service LearnerService {
   rpc PredictBatch(PredictBatchRequest) returns (PredictBatchResponse);
   rpc TrainBatch(TrainBatchRequest) returns (TrainBatchResponse);
+  rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
 }
