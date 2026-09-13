@@ -1,2 +1,0 @@
-class Checkpoint:
-    pass
