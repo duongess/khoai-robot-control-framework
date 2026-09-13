@@ -5,8 +5,8 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
 PROTO_FILES=(proto/learner/v1/environment.proto proto/learner/v1/transition.proto proto/learner/v1/learner.proto)
-mkdir -p gen/go/learner/v1 ai/generated/learner/v1
-touch ai/generated/__init__.py ai/generated/learner/__init__.py ai/generated/learner/v1/__init__.py
+mkdir -p gen/go/learner/v1 gen/python/learner/v1
+touch gen/python/learner/__init__.py gen/python/learner/v1/__init__.py
 
 if command -v protoc >/dev/null 2>&1; then
   PROTOC=(protoc)
@@ -26,8 +26,8 @@ fi
   proto/learner/v1/learner.proto
 
 poetry run python -m grpc_tools.protoc -I proto \
-  --python_out=ai/generated --pyi_out=ai/generated \
+  --python_out=gen/python --pyi_out=gen/python \
   "${PROTO_FILES[@]}"
 poetry run python -m grpc_tools.protoc -I proto \
-  --grpc_python_out=ai/generated \
+  --grpc_python_out=gen/python \
   proto/learner/v1/learner.proto

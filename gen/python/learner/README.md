@@ -1,1 +1,1 @@
-Generated Python protobuf bindings will be placed in this directory.
+Python protobuf bindings are generated into the v1 directory by scripts/generate-proto.sh.

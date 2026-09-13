@@ -9,7 +9,7 @@ import grpc
 import torch
 
 from ai.config import LearnerConfig, SACConfig
-from ai.generated.learner.v1 import environment_pb2, learner_pb2, learner_pb2_grpc
+from proto.learner.v1 import environment_pb2, learner_pb2, learner_pb2_grpc
 from ai.sac import SACAgent, TensorBatch
 
 
