@@ -1,4 +1,6 @@
 package framework
 
-type Observation []float32
+type State []float32
+
+type Observation = State
 type Action []float32
