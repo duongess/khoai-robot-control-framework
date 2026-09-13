@@ -1,0 +1,4 @@
+syntax = "proto3";
+package learner.v1;
+
+message EnvironmentSpec { string name = 1; string version = 2; }

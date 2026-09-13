@@ -1,0 +1,4 @@
+framework:
+  address: ":18080"
+learner:
+  address: ":15051"

@@ -1,0 +1,6 @@
+FROM golang:1.23
+WORKDIR /app
+COPY . .
+RUN go build -o /bin/framework-server ./cmd/framework-server
+EXPOSE 8080
+CMD ["/bin/framework-server"]

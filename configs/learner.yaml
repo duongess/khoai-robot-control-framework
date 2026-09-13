@@ -1,0 +1,3 @@
+learner:
+  batch_size: 64
+  replay_capacity: 100000

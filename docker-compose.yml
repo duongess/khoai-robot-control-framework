@@ -1,0 +1,11 @@
+services:
+  framework:
+    build:
+      context: .
+      dockerfile: deployments/docker/Dockerfile.framework
+    ports: ["8080:8080"]
+  learner:
+    build:
+      context: .
+      dockerfile: deployments/docker/Dockerfile.learner
+    ports: ["50051:50051"]

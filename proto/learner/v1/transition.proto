@@ -1,0 +1,10 @@
+syntax = "proto3";
+package learner.v1;
+
+message Transition {
+  repeated float observation = 1;
+  repeated float action = 2;
+  float reward = 3;
+  repeated float next_observation = 4;
+  bool done = 5;
+}

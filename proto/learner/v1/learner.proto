@@ -1,0 +1,7 @@
+syntax = "proto3";
+package learner.v1;
+option go_package = "learner/v1";
+
+service Learner { rpc SendTransitions(TransitionBatch) returns (BatchAck); }
+message TransitionBatch { repeated Transition transitions = 1; }
+message BatchAck { bool accepted = 1; }
