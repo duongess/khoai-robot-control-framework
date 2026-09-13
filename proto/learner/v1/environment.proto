@@ -1,4 +1,21 @@
 syntax = "proto3";
+
 package learner.v1;
 
-message EnvironmentSpec { string name = 1; string version = 2; }
+option go_package = "github.com/duongess/khoai-robot-control-framework/gen/go/learner/v1;learnerv1";
+
+message State {
+  repeated float values = 1;
+}
+
+message Action {
+  repeated float values = 1;
+}
+
+message EnvironmentDescriptor {
+  string name = 1;
+  string version = 2;
+  uint32 state_dimension = 3;
+  uint32 action_dimension = 4;
+  bool continuous_actions = 5;
+}

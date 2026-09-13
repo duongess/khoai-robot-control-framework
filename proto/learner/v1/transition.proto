@@ -1,10 +1,23 @@
 syntax = "proto3";
+
 package learner.v1;
 
+import "learner/v1/environment.proto";
+
+option go_package = "github.com/duongess/khoai-robot-control-framework/gen/go/learner/v1;learnerv1";
+
 message Transition {
-  repeated float observation = 1;
-  repeated float action = 2;
+  State state = 1;
+  Action action = 2;
   float reward = 3;
-  repeated float next_observation = 4;
-  bool done = 5;
+  State next_state = 4;
+  bool terminated = 5;
+  bool truncated = 6;
+  string episode_id = 7;
+  uint64 step = 8;
+}
+
+message TransitionBatch {
+  repeated Transition transitions = 1;
+  EnvironmentDescriptor environment = 2;
 }

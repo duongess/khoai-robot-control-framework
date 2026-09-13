@@ -1,7 +1,35 @@
 syntax = "proto3";
-package learner.v1;
-option go_package = "learner/v1";
 
-service Learner { rpc SendTransitions(TransitionBatch) returns (BatchAck); }
-message TransitionBatch { repeated Transition transitions = 1; }
-message BatchAck { bool accepted = 1; }
+package learner.v1;
+
+import "learner/v1/environment.proto";
+import "learner/v1/transition.proto";
+
+option go_package = "github.com/duongess/khoai-robot-control-framework/gen/go/learner/v1;learnerv1";
+
+message PredictBatchRequest {
+  EnvironmentDescriptor environment = 1;
+  repeated State states = 2;
+  string policy_version = 3;
+}
+
+message PredictBatchResponse {
+  repeated Action actions = 1;
+  string policy_version = 2;
+}
+
+message TrainBatchRequest {
+  TransitionBatch batch = 1;
+  string policy_version = 2;
+}
+
+message TrainBatchResponse {
+  bool accepted = 1;
+  uint64 samples_seen = 2;
+  string policy_version = 3;
+}
+
+service LearnerService {
+  rpc PredictBatch(PredictBatchRequest) returns (PredictBatchResponse);
+  rpc TrainBatch(TrainBatchRequest) returns (TrainBatchResponse);
+}
