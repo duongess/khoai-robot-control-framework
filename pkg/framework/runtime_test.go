@@ -25,6 +25,7 @@ func (runtimeTestFactory) Create() (Task, error) { return &runtimeTestTask{}, ni
 type runtimeTestLearner struct {
 	mu                     sync.Mutex
 	predictions, trainings int
+	action                 Action
 }
 
 func (l *runtimeTestLearner) HealthCheck(context.Context) (HealthStatus, error) {
@@ -36,7 +37,11 @@ func (l *runtimeTestLearner) PredictBatch(_ context.Context, states []State) (Pr
 	l.predictions++
 	actions := make([]Action, len(states))
 	for i := range actions {
-		actions[i] = Action{0.1}
+		if l.action != nil {
+			actions[i] = append(Action(nil), l.action...)
+		} else {
+			actions[i] = Action{0.1}
+		}
 	}
 	return PredictionResult{Actions: actions, PolicyVersion: 1}, nil
 }
@@ -112,5 +117,30 @@ func TestRuntimeBatchesWorkersAndSupportsPauseResume(t *testing.T) {
 	runtime.Stop()
 	if learner.predictions == 0 {
 		t.Fatal("runtime did not issue batched predictions")
+	}
+}
+
+func TestRuntimeRejectsUnsafePolicyActionsBeforeTaskStep(t *testing.T) {
+	learner := &runtimeTestLearner{action: Action{2}}
+	runtime := NewRuntime()
+	if err := runtime.RegisterTask(TaskRegistration{Descriptor: TaskDescriptor{Name: "safe", StateDimension: 2, ActionDimension: 1, ActionMin: -1, ActionMax: 1}, Factory: runtimeTestFactory{}}); err != nil {
+		t.Fatal(err)
+	}
+	config := DefaultRuntimeConfig()
+	config.WorkerCount, config.TickInterval = 1, time.Millisecond
+	if err := runtime.Configure(config, learner); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := runtime.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for runtime.Snapshot().Status != RuntimeError && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if runtime.Snapshot().Status != RuntimeError {
+		t.Fatalf("runtime did not reject unsafe action: %#v", runtime.Snapshot())
 	}
 }

@@ -15,41 +15,57 @@ class PredictBatchRequest(_message.Message):
     POLICY_VERSION_FIELD_NUMBER: _ClassVar[int]
     environment: _environment_pb2.EnvironmentDescriptor
     states: _containers.RepeatedCompositeFieldContainer[_environment_pb2.State]
-    policy_version: str
-    def __init__(self, environment: _Optional[_Union[_environment_pb2.EnvironmentDescriptor, _Mapping]] = ..., states: _Optional[_Iterable[_Union[_environment_pb2.State, _Mapping]]] = ..., policy_version: _Optional[str] = ...) -> None: ...
+    policy_version: int
+    def __init__(self, environment: _Optional[_Union[_environment_pb2.EnvironmentDescriptor, _Mapping]] = ..., states: _Optional[_Iterable[_Union[_environment_pb2.State, _Mapping]]] = ..., policy_version: _Optional[int] = ...) -> None: ...
 
 class PredictBatchResponse(_message.Message):
     __slots__ = ("actions", "policy_version")
     ACTIONS_FIELD_NUMBER: _ClassVar[int]
     POLICY_VERSION_FIELD_NUMBER: _ClassVar[int]
     actions: _containers.RepeatedCompositeFieldContainer[_environment_pb2.Action]
-    policy_version: str
-    def __init__(self, actions: _Optional[_Iterable[_Union[_environment_pb2.Action, _Mapping]]] = ..., policy_version: _Optional[str] = ...) -> None: ...
+    policy_version: int
+    def __init__(self, actions: _Optional[_Iterable[_Union[_environment_pb2.Action, _Mapping]]] = ..., policy_version: _Optional[int] = ...) -> None: ...
 
 class TrainBatchRequest(_message.Message):
     __slots__ = ("batch", "policy_version")
     BATCH_FIELD_NUMBER: _ClassVar[int]
     POLICY_VERSION_FIELD_NUMBER: _ClassVar[int]
     batch: _transition_pb2.TransitionBatch
-    policy_version: str
-    def __init__(self, batch: _Optional[_Union[_transition_pb2.TransitionBatch, _Mapping]] = ..., policy_version: _Optional[str] = ...) -> None: ...
+    policy_version: int
+    def __init__(self, batch: _Optional[_Union[_transition_pb2.TransitionBatch, _Mapping]] = ..., policy_version: _Optional[int] = ...) -> None: ...
 
 class TrainBatchResponse(_message.Message):
-    __slots__ = ("accepted", "samples_seen", "policy_version")
+    __slots__ = ("accepted", "samples_seen", "policy_version", "actor_loss", "critic_loss", "alpha_loss", "entropy", "training_step")
     ACCEPTED_FIELD_NUMBER: _ClassVar[int]
     SAMPLES_SEEN_FIELD_NUMBER: _ClassVar[int]
     POLICY_VERSION_FIELD_NUMBER: _ClassVar[int]
+    ACTOR_LOSS_FIELD_NUMBER: _ClassVar[int]
+    CRITIC_LOSS_FIELD_NUMBER: _ClassVar[int]
+    ALPHA_LOSS_FIELD_NUMBER: _ClassVar[int]
+    ENTROPY_FIELD_NUMBER: _ClassVar[int]
+    TRAINING_STEP_FIELD_NUMBER: _ClassVar[int]
     accepted: bool
     samples_seen: int
-    policy_version: str
-    def __init__(self, accepted: _Optional[bool] = ..., samples_seen: _Optional[int] = ..., policy_version: _Optional[str] = ...) -> None: ...
+    policy_version: int
+    actor_loss: float
+    critic_loss: float
+    alpha_loss: float
+    entropy: float
+    training_step: int
+    def __init__(self, accepted: _Optional[bool] = ..., samples_seen: _Optional[int] = ..., policy_version: _Optional[int] = ..., actor_loss: _Optional[float] = ..., critic_loss: _Optional[float] = ..., alpha_loss: _Optional[float] = ..., entropy: _Optional[float] = ..., training_step: _Optional[int] = ...) -> None: ...
 
 class HealthCheckRequest(_message.Message):
     __slots__ = ()
     def __init__(self) -> None: ...
 
 class HealthCheckResponse(_message.Message):
-    __slots__ = ("ready",)
+    __slots__ = ("ready", "policy_version", "training_step", "device")
     READY_FIELD_NUMBER: _ClassVar[int]
+    POLICY_VERSION_FIELD_NUMBER: _ClassVar[int]
+    TRAINING_STEP_FIELD_NUMBER: _ClassVar[int]
+    DEVICE_FIELD_NUMBER: _ClassVar[int]
     ready: bool
-    def __init__(self, ready: _Optional[bool] = ...) -> None: ...
+    policy_version: int
+    training_step: int
+    device: str
+    def __init__(self, ready: _Optional[bool] = ..., policy_version: _Optional[int] = ..., training_step: _Optional[int] = ..., device: _Optional[str] = ...) -> None: ...

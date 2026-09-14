@@ -1,8 +1,12 @@
 .env
+.neuprint/
+neuprint-credentials*
+data/connectome/*.parquet
+data/connectome/*.npz
+data/connectome/*metadata.json
 __pycache__/
 *.py[cod]
 .venv/
 bin/
 dist/
 *.log
-

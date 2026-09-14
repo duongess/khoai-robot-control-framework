@@ -1,0 +1,11 @@
+# Existing Go task APIs and gRPC actions remain unchanged; these configure the Python learner.
+controller:
+  type: fly_connectome
+  graph_path: data/connectome/connectome_graph.npz
+  propagation_steps: 4
+  train_edge_gains: true
+  freeze_topology: true
+  activation: tanh
+  action_dead_zone: 0.1
+  max_horizontal_speed: 0.2
+  max_vertical_speed: 0.2

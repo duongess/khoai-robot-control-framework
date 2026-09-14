@@ -10,11 +10,13 @@ from pathlib import Path
 import grpc
 import torch
 
-sys.path.insert(0, str(Path(__file__).resolve().parent / "generated"))
+# Generated modules import one another as ``learner.v1``.  Make their actual
+# repository root available for both `python -m ai` and pytest.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "gen" / "python"))
 
 from ai.config import LearnerConfig, SACConfig
 from ai.sac import SACAgent, TensorBatch
-from gen.python.learner.v1 import environment_pb2, learner_pb2, learner_pb2_grpc
+from learner.v1 import environment_pb2, learner_pb2, learner_pb2_grpc
 
 
 ADDRESS = "127.0.0.1:50051"
@@ -48,7 +50,21 @@ class LearnerServicer(learner_pb2_grpc.LearnerServiceServicer):
 
     def __init__(self, config: LearnerConfig | None = None) -> None:
         self._config = config or LearnerConfig.from_environment()
-        self._agent = SACAgent(SACConfig(state_dim=self._config.state_dim, action_dim=self._config.action_dim, target_entropy=-float(self._config.action_dim)))
+        self._agent = SACAgent(SACConfig(
+            state_dim=self._config.state_dim,
+            action_dim=self._config.action_dim,
+            target_entropy=-float(self._config.action_dim),
+            controller_type=self._config.controller_type,
+            graph_path=self._config.graph_path,
+            propagation_steps=self._config.propagation_steps,
+            train_edge_gains=self._config.train_edge_gains,
+            freeze_topology=self._config.freeze_topology,
+            activation=self._config.activation,
+            action_dead_zone=self._config.action_dead_zone,
+            max_horizontal_speed=self._config.max_horizontal_speed,
+            max_vertical_speed=self._config.max_vertical_speed,
+            max_gripper_command=self._config.max_gripper_command,
+        ))
         self._samples_seen = 0
         self._policy_version = 0
         self._training_step = 0

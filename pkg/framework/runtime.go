@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"time"
 )
 
@@ -197,6 +198,13 @@ func (r *Runtime) cycle(ctx context.Context, descriptor TaskDescriptor) {
 			r.lastError = fmt.Sprintf("worker %d received action dimension %d, want %d", worker.id, len(action), descriptor.ActionDimension)
 			r.status = RuntimeError
 			return
+		}
+		for component, value := range action {
+			if math.IsNaN(float64(value)) || math.IsInf(float64(value), 0) || value < descriptor.ActionMin || value > descriptor.ActionMax {
+				r.lastError = fmt.Sprintf("worker %d received unsafe action[%d]=%v outside [%v, %v]", worker.id, component, value, descriptor.ActionMin, descriptor.ActionMax)
+				r.status = RuntimeError
+				return
+			}
 		}
 		result, stepErr := worker.task.Step(action)
 		if stepErr != nil {

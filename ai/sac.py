@@ -8,6 +8,8 @@ from torch import nn
 from torch.nn import functional as functional
 
 from ai.config import SACConfig
+from ai.connectome.graph import ConnectomeGraph
+from ai.connectome.policy import FlyConnectomePolicy, RandomGraphPolicy
 from ai.networks import Critic, GaussianActor
 
 
@@ -28,7 +30,7 @@ class SACAgent:
         self.device = torch.device("cpu")
         torch.manual_seed(config.seed)
 
-        self.actor = GaussianActor(config.state_dim, config.action_dim, config.hidden_dim).to(self.device)
+        self.actor = self._build_actor(config).to(self.device)
         self.critic_one = Critic(config.state_dim, config.action_dim, config.hidden_dim).to(self.device)
         self.critic_two = Critic(config.state_dim, config.action_dim, config.hidden_dim).to(self.device)
         self.target_critic_one = deepcopy(self.critic_one).to(self.device)
@@ -85,6 +87,28 @@ class SACAgent:
     @property
     def alpha(self) -> torch.Tensor:
         return self.log_alpha.exp()
+
+    @staticmethod
+    def _build_actor(config: SACConfig) -> nn.Module:
+        if config.controller_type == "mlp":
+            return GaussianActor(config.state_dim, config.action_dim, config.hidden_dim)
+        graph = ConnectomeGraph.load(config.graph_path or "")
+        arguments = dict(
+            observation_dim=config.state_dim,
+            action_dim=config.action_dim,
+            graph=graph,
+            hidden_dim=config.hidden_dim,
+            propagation_steps=config.propagation_steps,
+            train_edge_gains=config.train_edge_gains,
+            activation=config.activation,
+            action_dead_zone=config.action_dead_zone,
+            max_horizontal_speed=config.max_horizontal_speed,
+            max_vertical_speed=config.max_vertical_speed,
+            max_gripper_command=config.max_gripper_command,
+        )
+        if config.controller_type == "random_graph":
+            return RandomGraphPolicy(**arguments, seed=config.seed)
+        return FlyConnectomePolicy(**arguments)
 
     def _prepare_batch(self, batch: TensorBatch) -> tuple[torch.Tensor, ...]:
         tensors = tuple(
