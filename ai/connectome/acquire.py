@@ -16,17 +16,27 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+from dotenv import load_dotenv
 
 from ai.connectome.graph import ConnectomeGraph, GraphArtifactError
 
 SERVER = "neuprint.janelia.org"
-DEFAULT_DATASET = "vnc:v1.0"
+# ``vnc:v1.0`` was the originally requested dataset name, but it is no longer
+# advertised by neuprint.janelia.org.  MANC is the available adult male nerve
+# cord dataset; the inspect command still verifies this server-side before any
+# query or download is performed.
+DEFAULT_DATASET = "manc:v1.2.3"
 ANNOTATION_FIELDS = ("bodyId", "type", "instance", "status", "statusLabel", "somaSide", "rootSide", "somaNeuromere", "class", "subclass", "superclass", "hemilineage", "entryNerve", "exitNerve", "label")
 
 
 def load_neuprint_token(environ: dict[str, str] | None = None) -> str:
     """Read a non-empty token only from ``NEUPRINT_TOKEN``; never print it."""
-    token = (environ or os.environ).get("NEUPRINT_TOKEN", "").strip()
+    # The checked-in example documents this variable in a local, ignored `.env`.
+    # Explicit test/caller mappings remain isolated from the process environment.
+    if environ is None:
+        load_dotenv()
+    source = os.environ if environ is None else environ
+    token = source.get("NEUPRINT_TOKEN", "").strip()
     if not token or token == "your_token_here":
         raise RuntimeError("NEUPRINT_TOKEN is required; export it before running a neuPrint command")
     return token
@@ -146,9 +156,21 @@ def download_and_preprocess(selection_path: str | Path, output_dir: str | Path, 
         raise RuntimeError("run `python -m ai.connectome inspect` first; selection must follow schema inspection")
     selection = json.loads(Path(selection_path).read_text())
     client, dataset_info = create_verified_client(dataset)
-    from neuprint import fetch_adjacencies, fetch_neurons
+    from neuprint import NeuronCriteria, fetch_adjacencies, fetch_neurons
 
-    nodes, _ = fetch_neurons(client=client, omit_rois=True)
+    node_selector = selection.get("nodes", {})
+    explicit_body_ids = node_selector.get("body_ids")
+    if explicit_body_ids:
+        # A reviewed exact-ID manifest must not trigger a full-dataset metadata
+        # download. This is the normal MVP path and keeps acquisition bounded.
+        requested_metadata_ids = [int(body_id) for body_id in explicit_body_ids]
+        nodes = fetch_neurons(
+            NeuronCriteria(bodyId=requested_metadata_ids), omit_rois=True, client=client
+        )
+    else:
+        # Annotation-based selectors remain supported for a reviewed schema, but
+        # necessarily require metadata discovery before local filtering.
+        nodes = fetch_neurons(client=client, omit_rois=True)
     reviewed = _apply_selector(nodes, selection.get("nodes", {}))
     if reviewed.empty:
         raise GraphArtifactError("selection manifest matched no metadata rows")

@@ -23,16 +23,17 @@ Install dependencies, then export a personal credential. Never put a real token 
 
 ```bash
 poetry install
+# Either export the token or put it in the ignored local `.env` file.
 export NEUPRINT_TOKEN='...'
-python -m ai.connectome inspect --output data/connectome --dataset vnc:v1.0
+poetry run python -m ai.connectome inspect --output data/connectome --dataset manc:v1.2.3
 ```
 
-`inspect` first asks the server whether `vnc:v1.0` is advertised, then saves the available neuron-property schema and a metadata sample. Review those files before copying and editing `configs/connectome_selection.example.json`. Use exact body IDs or terms demonstrably present in reviewed metadata. The tool deliberately does not assume an `.*MN.*` convention or hard-code neuron IDs.
+`vnc:v1.0` is no longer advertised by neuprint.janelia.org. The current default, `manc:v1.2.3`, is an available adult male nerve-cord dataset. `inspect` first verifies the chosen dataset against the server, then saves the available neuron-property schema and a metadata sample. Review those files before copying and editing `configs/connectome_selection.example.json`. Use exact body IDs or terms demonstrably present in reviewed metadata. The tool deliberately does not assume an `.*MN.*` convention or hard-code neuron IDs.
 
 ```bash
 cp configs/connectome_selection.example.json data/connectome/selection.json
 # Edit every empty group after reviewing data/connectome/dataset_schema.json
-python -m ai.connectome download --selection data/connectome/selection.json \
+poetry run python -m ai.connectome download --selection data/connectome/selection.json \
   --output data/connectome --max-neurons 256 --max-edges 5000
 ```
 
@@ -87,6 +88,6 @@ go test ./...
 
 - The MVP default is limited to 256 nodes/5,000 edges; do not download an entire VNC graph.
 - `NEUPRINT_TOKEN is required` means export the token for the inspection/download process. It is not read from an arbitrary credential file.
-- `vnc:v1.0 is unavailable` is an explicit dataset verification failure; choose only a dataset the client advertises and record the change.
+- A dataset-unavailable error is an explicit verification failure; choose only a dataset the client advertises, pass it with `--dataset`, and record that choice in the cached metadata.
 - Empty motor/input groups are errors, not a silent fallback to arbitrary neurons.
 - Sparse runtime grows with edge count, propagation steps, and batch size.

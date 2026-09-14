@@ -87,7 +87,7 @@ func (r *Runtime) ReplaceTask(registration TaskRegistration) error {
 		if len(state) != registration.Descriptor.StateDimension {
 			return fmt.Errorf("replacement worker %d returned state dimension %d, want %d", worker.id, len(state), registration.Descriptor.StateDimension)
 		}
-		worker.task, worker.state, worker.episodeID, worker.episodeStep, worker.episodeReward, worker.outcome = task, append(State(nil), state...), worker.episodeID+1, 0, 0, OutcomeRunning
+		worker.task, worker.state, worker.episodeID, worker.episodeStep, worker.episodeReward, worker.lastInfo, worker.outcome = task, append(State(nil), state...), worker.episodeID+1, 0, 0, nil, OutcomeRunning
 	}
 	return nil
 }

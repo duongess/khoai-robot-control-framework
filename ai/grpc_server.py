@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "gen" / "python"))
 
 from ai.config import LearnerConfig, SACConfig
 from ai.sac import SACAgent, TensorBatch
-from learner.v1 import environment_pb2, learner_pb2, learner_pb2_grpc
+from gen.python.learner.v1 import environment_pb2, learner_pb2, learner_pb2_grpc
 
 
 ADDRESS = "127.0.0.1:50051"

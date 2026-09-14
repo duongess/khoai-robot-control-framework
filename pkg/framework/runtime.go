@@ -27,6 +27,7 @@ type runtimeWorker struct {
 	lastAction    Action
 	lastReward    float32
 	episodeReward float64
+	lastInfo      map[string]float32
 	outcome       Outcome
 }
 
@@ -59,6 +60,7 @@ type WorkerSnapshot struct {
 	LastAction    Action  `json:"last_action"`
 	LastReward    float32 `json:"last_reward"`
 	EpisodeReward float64 `json:"episode_reward"`
+	Info          map[string]float32 `json:"info,omitempty"`
 	Outcome       Outcome `json:"outcome"`
 }
 
@@ -233,7 +235,7 @@ func (r *Runtime) cycle(ctx context.Context, descriptor TaskDescriptor) {
 		}
 		transition := Transition{Observation: worker.state, Action: action, Reward: result.Reward, NextObservation: result.State, Outcome: result.Outcome, Done: result.Done}
 		r.replay.Add(transition)
-		worker.lastAction, worker.lastReward, worker.outcome = append(Action(nil), action...), result.Reward, result.Outcome
+		worker.lastAction, worker.lastReward, worker.lastInfo, worker.outcome = append(Action(nil), action...), result.Reward, cloneInfo(result.Info), result.Outcome
 		worker.episodeStep++
 		worker.episodeReward += float64(result.Reward)
 		r.metrics.totalSteps++
@@ -249,7 +251,7 @@ func (r *Runtime) cycle(ctx context.Context, descriptor TaskDescriptor) {
 				r.status = RuntimeError
 				return
 			}
-			worker.state, worker.episodeID, worker.episodeStep, worker.episodeReward, worker.outcome = append(State(nil), state...), worker.episodeID+1, 0, 0, OutcomeRunning
+			worker.state, worker.episodeID, worker.episodeStep, worker.episodeReward, worker.lastInfo, worker.outcome = append(State(nil), state...), worker.episodeID+1, 0, 0, nil, OutcomeRunning
 		} else {
 			worker.state = append(State(nil), result.State...)
 		}
@@ -307,7 +309,7 @@ func (r *Runtime) Reset() error {
 		if err != nil {
 			return err
 		}
-		worker.state, worker.episodeID, worker.episodeStep, worker.episodeReward, worker.outcome = append(State(nil), state...), worker.episodeID+1, 0, 0, OutcomeRunning
+		worker.state, worker.episodeID, worker.episodeStep, worker.episodeReward, worker.lastInfo, worker.outcome = append(State(nil), state...), worker.episodeID+1, 0, 0, nil, OutcomeRunning
 	}
 	return nil
 }
@@ -350,9 +352,20 @@ func (r *Runtime) Snapshot() RuntimeSnapshot {
 	}
 	snapshot.Workers = make([]WorkerSnapshot, len(r.workers))
 	for i, worker := range r.workers {
-		snapshot.Workers[i] = WorkerSnapshot{ID: worker.id, EpisodeID: worker.episodeID, EpisodeStep: worker.episodeStep, State: append(State(nil), worker.state...), LastAction: append(Action(nil), worker.lastAction...), LastReward: worker.lastReward, EpisodeReward: worker.episodeReward, Outcome: worker.outcome}
+		snapshot.Workers[i] = WorkerSnapshot{ID: worker.id, EpisodeID: worker.episodeID, EpisodeStep: worker.episodeStep, State: append(State(nil), worker.state...), LastAction: append(Action(nil), worker.lastAction...), LastReward: worker.lastReward, EpisodeReward: worker.episodeReward, Info: cloneInfo(worker.lastInfo), Outcome: worker.outcome}
 	}
 	return snapshot
+}
+
+func cloneInfo(info map[string]float32) map[string]float32 {
+	if len(info) == 0 {
+		return nil
+	}
+	copy := make(map[string]float32, len(info))
+	for key, value := range info {
+		copy[key] = value
+	}
+	return copy
 }
 
 func (r *Runtime) updateRates(now time.Time) {

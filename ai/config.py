@@ -4,7 +4,6 @@ from dataclasses import dataclass
 import os
 from pathlib import Path
 
-
 @dataclass(frozen=True)
 class SACConfig:
     state_dim: int
@@ -43,7 +42,7 @@ class SACConfig:
 
 @dataclass(frozen=True)
 class LearnerConfig:
-    state_dim: int = 20
+    state_dim: int = 19
     action_dim: int = 3
     controller_type: str = "mlp"
     graph_path: str | None = None
@@ -61,7 +60,7 @@ class LearnerConfig:
         try:
             graph_path = os.environ.get("LEARNER_GRAPH_PATH")
             return cls(
-                state_dim=int(os.environ.get("LEARNER_STATE_DIM", "20")),
+                state_dim=int(os.environ.get("LEARNER_STATE_DIM", "21")),
                 action_dim=int(os.environ.get("LEARNER_ACTION_DIM", "3")),
                 controller_type=os.environ.get("LEARNER_CONTROLLER", "mlp"),
                 graph_path=graph_path,
