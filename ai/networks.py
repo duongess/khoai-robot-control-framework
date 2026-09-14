@@ -8,7 +8,7 @@ from torch.distributions import Normal
 class GaussianActor(nn.Module):
     """A Gaussian policy with tanh-squashed continuous actions."""
 
-    def __init__(self, state_dim: int, hidden_dim: int) -> None:
+    def __init__(self, state_dim: int, action_dim: int, hidden_dim: int) -> None:
         super().__init__()
         self.backbone = nn.Sequential(
             nn.Linear(state_dim, hidden_dim),
@@ -16,8 +16,8 @@ class GaussianActor(nn.Module):
             nn.Linear(hidden_dim, hidden_dim),
             nn.ReLU(),
         )
-        self.mean = nn.Linear(hidden_dim, 1)
-        self.log_std = nn.Linear(hidden_dim, 1)
+        self.mean = nn.Linear(hidden_dim, action_dim)
+        self.log_std = nn.Linear(hidden_dim, action_dim)
 
     def forward(self, states: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         features = self.backbone(states)
@@ -41,10 +41,10 @@ class GaussianActor(nn.Module):
 class Critic(nn.Module):
     """A state-action value estimator."""
 
-    def __init__(self, state_dim: int, hidden_dim: int) -> None:
+    def __init__(self, state_dim: int, action_dim: int, hidden_dim: int) -> None:
         super().__init__()
         self.network = nn.Sequential(
-            nn.Linear(state_dim + 1, hidden_dim),
+            nn.Linear(state_dim + action_dim, hidden_dim),
             nn.ReLU(),
             nn.Linear(hidden_dim, hidden_dim),
             nn.ReLU(),

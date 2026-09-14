@@ -28,9 +28,9 @@ class SACAgent:
         self.device = torch.device("cpu")
         torch.manual_seed(config.seed)
 
-        self.actor = GaussianActor(config.state_dim, config.hidden_dim).to(self.device)
-        self.critic_one = Critic(config.state_dim, config.hidden_dim).to(self.device)
-        self.critic_two = Critic(config.state_dim, config.hidden_dim).to(self.device)
+        self.actor = GaussianActor(config.state_dim, config.action_dim, config.hidden_dim).to(self.device)
+        self.critic_one = Critic(config.state_dim, config.action_dim, config.hidden_dim).to(self.device)
+        self.critic_two = Critic(config.state_dim, config.action_dim, config.hidden_dim).to(self.device)
         self.target_critic_one = deepcopy(self.critic_one).to(self.device)
         self.target_critic_two = deepcopy(self.critic_two).to(self.device)
 
@@ -76,7 +76,8 @@ class SACAgent:
 
         return {
             "actor_loss": float(actor_loss.detach()),
-            "alpha": float(self.alpha.detach()),
+            "alpha_loss": float(alpha_loss.detach()),
+            "entropy": float((-log_probability).mean().detach()),
             "critic_one_loss": float(critic_one_loss.detach()),
             "critic_two_loss": float(critic_two_loss.detach()),
         }
@@ -93,10 +94,11 @@ class SACAgent:
         states, actions, rewards, next_states, dones = tensors
         self._validate_states(states)
         self._validate_states(next_states)
-        expected_shape = (states.shape[0], 1)
-        for name, tensor in (("actions", actions), ("rewards", rewards), ("dones", dones)):
-            if tuple(tensor.shape) != expected_shape:
-                raise ValueError(f"{name} must have shape {expected_shape}")
+        if tuple(actions.shape) != (states.shape[0], self.config.action_dim):
+            raise ValueError(f"actions must have shape {(states.shape[0], self.config.action_dim)}")
+        for name, tensor in (("rewards", rewards), ("dones", dones)):
+            if tuple(tensor.shape) != (states.shape[0], 1):
+                raise ValueError(f"{name} must have shape {(states.shape[0], 1)}")
         if states.shape[0] == 0:
             raise ValueError("transition batch must not be empty")
         if not all(torch.isfinite(tensor).all() for tensor in tensors):

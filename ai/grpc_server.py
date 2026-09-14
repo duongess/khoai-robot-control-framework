@@ -3,18 +3,21 @@
 import json
 import logging
 import signal
+import sys
 from concurrent import futures
+from pathlib import Path
 
 import grpc
 import torch
 
+sys.path.insert(0, str(Path(__file__).resolve().parent / "generated"))
+
 from ai.config import LearnerConfig, SACConfig
-from proto.learner.v1 import environment_pb2, learner_pb2, learner_pb2_grpc
 from ai.sac import SACAgent, TensorBatch
+from gen.python.learner.v1 import environment_pb2, learner_pb2, learner_pb2_grpc
 
 
 ADDRESS = "127.0.0.1:50051"
-POLICY_VERSION = "sac-v1"
 
 
 class JsonFormatter(logging.Formatter):
@@ -45,91 +48,69 @@ class LearnerServicer(learner_pb2_grpc.LearnerServiceServicer):
 
     def __init__(self, config: LearnerConfig | None = None) -> None:
         self._config = config or LearnerConfig.from_environment()
-        self._agent = SACAgent(SACConfig(state_dim=self._config.state_dim))
+        self._agent = SACAgent(SACConfig(state_dim=self._config.state_dim, action_dim=self._config.action_dim, target_entropy=-float(self._config.action_dim)))
         self._samples_seen = 0
+        self._policy_version = 0
+        self._training_step = 0
 
     def PredictBatch(self, request, context):
         try:
             states = self._states_to_tensor(request.states, "states")
-            predicted_actions = self._agent.act(states, deterministic=True)
+            predicted_actions = self._agent.act(states, deterministic=True).clamp(-1, 1)
         except ValueError as error:
             context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(error))
-
-        actions = [environment_pb2.Action(values=[float(action[0])]) for action in predicted_actions]
+        actions = [environment_pb2.Action(values=[float(value) for value in action]) for action in predicted_actions]
         LOGGER.info("predict_batch", extra={"fields": {"states": len(request.states)}})
-        return learner_pb2.PredictBatchResponse(actions=actions, policy_version=POLICY_VERSION)
+        return learner_pb2.PredictBatchResponse(actions=actions, policy_version=self._policy_version)
 
     def TrainBatch(self, request, context):
         if not request.HasField("batch"):
             context.abort(grpc.StatusCode.INVALID_ARGUMENT, "transition batch is required")
-
         try:
             batch = self._batch_to_tensors(request.batch.transitions)
             metrics = self._agent.update(batch)
         except ValueError as error:
             context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(error))
-
-        received = len(request.batch.transitions)
-        self._samples_seen += received
-        samples_seen = self._samples_seen
-        LOGGER.info(
-            "train_batch",
-            extra={"fields": {"received": received, "samples_seen": samples_seen, **metrics}},
-        )
-        return learner_pb2.TrainBatchResponse(
-            accepted=True,
-            samples_seen=samples_seen,
-            policy_version=POLICY_VERSION,
-        )
+        self._samples_seen += len(request.batch.transitions)
+        self._training_step += 1
+        self._policy_version += 1
+        LOGGER.info("train_batch", extra={"fields": {"received": len(request.batch.transitions), "samples_seen": self._samples_seen, **metrics}})
+        return learner_pb2.TrainBatchResponse(accepted=True, samples_seen=self._samples_seen, policy_version=self._policy_version, actor_loss=metrics["actor_loss"], critic_loss=(metrics["critic_one_loss"] + metrics["critic_two_loss"]) / 2, alpha_loss=metrics["alpha_loss"], entropy=metrics["entropy"], training_step=self._training_step)
 
     def HealthCheck(self, request, context):
-        LOGGER.info("health_check", extra={"fields": {"ready": True}})
-        return learner_pb2.HealthCheckResponse(ready=True)
+        return learner_pb2.HealthCheckResponse(ready=True, policy_version=self._policy_version, training_step=self._training_step, device=str(self._agent.device))
 
     def _states_to_tensor(self, states, field_name: str) -> torch.Tensor:
         values = [list(state.values) for state in states]
+        if not values:
+            raise ValueError(f"{field_name} must not be empty")
         if any(len(state) != self._config.state_dim for state in values):
             raise ValueError(f"{field_name} must contain states with dimension {self._config.state_dim}")
-        if not values:
-            return torch.empty((0, self._config.state_dim), dtype=torch.float32)
-        return torch.tensor(values, dtype=torch.float32)
+        tensor = torch.tensor(values, dtype=torch.float32)
+        if not torch.isfinite(tensor).all():
+            raise ValueError(f"{field_name} must contain only finite values")
+        return tensor
 
     def _batch_to_tensors(self, transitions) -> TensorBatch:
         if not transitions:
             raise ValueError("transition batch must not be empty")
-
-        states = []
-        actions = []
-        rewards = []
-        next_states = []
-        dones = []
+        states, actions, rewards, next_states, dones = [], [], [], [], []
         for index, transition in enumerate(transitions):
-            if not transition.HasField("state"):
-                raise ValueError(f"transition {index} is missing state")
-            if not transition.HasField("action"):
-                raise ValueError(f"transition {index} is missing action")
-            if not transition.HasField("next_state"):
-                raise ValueError(f"transition {index} is missing next state")
-            if len(transition.state.values) != self._config.state_dim:
+            if not transition.HasField("state") or not transition.HasField("action") or not transition.HasField("next_state"):
+                raise ValueError(f"transition {index} is missing state, action, or next state")
+            if len(transition.state.values) != self._config.state_dim or len(transition.next_state.values) != self._config.state_dim:
                 raise ValueError(f"transition {index} has an invalid state dimension")
-            if len(transition.next_state.values) != self._config.state_dim:
-                raise ValueError(f"transition {index} has an invalid next state dimension")
-            if len(transition.action.values) != 1:
-                raise ValueError(f"transition {index} must contain one action value")
-
+            if len(transition.action.values) != self._config.action_dim:
+                raise ValueError(f"transition {index} has an invalid action dimension")
             states.append(list(transition.state.values))
             actions.append(list(transition.action.values))
             rewards.append([transition.reward])
             next_states.append(list(transition.next_state.values))
             dones.append([float(transition.terminated or transition.truncated)])
-
-        return TensorBatch(
-            states=torch.tensor(states, dtype=torch.float32),
-            actions=torch.tensor(actions, dtype=torch.float32),
-            rewards=torch.tensor(rewards, dtype=torch.float32),
-            next_states=torch.tensor(next_states, dtype=torch.float32),
-            dones=torch.tensor(dones, dtype=torch.float32),
-        )
+        batch = TensorBatch(states=torch.tensor(states, dtype=torch.float32), actions=torch.tensor(actions, dtype=torch.float32), rewards=torch.tensor(rewards, dtype=torch.float32), next_states=torch.tensor(next_states, dtype=torch.float32), dones=torch.tensor(dones, dtype=torch.float32))
+        if not all(torch.isfinite(tensor).all() for tensor in (batch.states, batch.actions, batch.rewards, batch.next_states, batch.dones)):
+            raise ValueError("transition batch contains non-finite values")
+        return batch
 
 
 def create_server() -> grpc.Server:
@@ -152,7 +133,3 @@ def serve() -> None:
     signal.signal(signal.SIGINT, stop_server)
     signal.signal(signal.SIGTERM, stop_server)
     server.wait_for_termination()
-
-
-if __name__ == "__main__":
-    serve()

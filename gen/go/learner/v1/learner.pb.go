@@ -25,7 +25,7 @@ type PredictBatchRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Environment   *EnvironmentDescriptor `protobuf:"bytes,1,opt,name=environment,proto3" json:"environment,omitempty"`
 	States        []*State               `protobuf:"bytes,2,rep,name=states,proto3" json:"states,omitempty"`
-	PolicyVersion string                 `protobuf:"bytes,3,opt,name=policy_version,json=policyVersion,proto3" json:"policy_version,omitempty"`
+	PolicyVersion uint64                 `protobuf:"varint,3,opt,name=policy_version,json=policyVersion,proto3" json:"policy_version,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -74,17 +74,17 @@ func (x *PredictBatchRequest) GetStates() []*State {
 	return nil
 }
 
-func (x *PredictBatchRequest) GetPolicyVersion() string {
+func (x *PredictBatchRequest) GetPolicyVersion() uint64 {
 	if x != nil {
 		return x.PolicyVersion
 	}
-	return ""
+	return 0
 }
 
 type PredictBatchResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Actions       []*Action              `protobuf:"bytes,1,rep,name=actions,proto3" json:"actions,omitempty"`
-	PolicyVersion string                 `protobuf:"bytes,2,opt,name=policy_version,json=policyVersion,proto3" json:"policy_version,omitempty"`
+	PolicyVersion uint64                 `protobuf:"varint,2,opt,name=policy_version,json=policyVersion,proto3" json:"policy_version,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -126,17 +126,17 @@ func (x *PredictBatchResponse) GetActions() []*Action {
 	return nil
 }
 
-func (x *PredictBatchResponse) GetPolicyVersion() string {
+func (x *PredictBatchResponse) GetPolicyVersion() uint64 {
 	if x != nil {
 		return x.PolicyVersion
 	}
-	return ""
+	return 0
 }
 
 type TrainBatchRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Batch         *TransitionBatch       `protobuf:"bytes,1,opt,name=batch,proto3" json:"batch,omitempty"`
-	PolicyVersion string                 `protobuf:"bytes,2,opt,name=policy_version,json=policyVersion,proto3" json:"policy_version,omitempty"`
+	PolicyVersion uint64                 `protobuf:"varint,2,opt,name=policy_version,json=policyVersion,proto3" json:"policy_version,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -178,18 +178,23 @@ func (x *TrainBatchRequest) GetBatch() *TransitionBatch {
 	return nil
 }
 
-func (x *TrainBatchRequest) GetPolicyVersion() string {
+func (x *TrainBatchRequest) GetPolicyVersion() uint64 {
 	if x != nil {
 		return x.PolicyVersion
 	}
-	return ""
+	return 0
 }
 
 type TrainBatchResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Accepted      bool                   `protobuf:"varint,1,opt,name=accepted,proto3" json:"accepted,omitempty"`
 	SamplesSeen   uint64                 `protobuf:"varint,2,opt,name=samples_seen,json=samplesSeen,proto3" json:"samples_seen,omitempty"`
-	PolicyVersion string                 `protobuf:"bytes,3,opt,name=policy_version,json=policyVersion,proto3" json:"policy_version,omitempty"`
+	PolicyVersion uint64                 `protobuf:"varint,3,opt,name=policy_version,json=policyVersion,proto3" json:"policy_version,omitempty"`
+	ActorLoss     float32                `protobuf:"fixed32,4,opt,name=actor_loss,json=actorLoss,proto3" json:"actor_loss,omitempty"`
+	CriticLoss    float32                `protobuf:"fixed32,5,opt,name=critic_loss,json=criticLoss,proto3" json:"critic_loss,omitempty"`
+	AlphaLoss     float32                `protobuf:"fixed32,6,opt,name=alpha_loss,json=alphaLoss,proto3" json:"alpha_loss,omitempty"`
+	Entropy       float32                `protobuf:"fixed32,7,opt,name=entropy,proto3" json:"entropy,omitempty"`
+	TrainingStep  uint64                 `protobuf:"varint,8,opt,name=training_step,json=trainingStep,proto3" json:"training_step,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -238,11 +243,46 @@ func (x *TrainBatchResponse) GetSamplesSeen() uint64 {
 	return 0
 }
 
-func (x *TrainBatchResponse) GetPolicyVersion() string {
+func (x *TrainBatchResponse) GetPolicyVersion() uint64 {
 	if x != nil {
 		return x.PolicyVersion
 	}
-	return ""
+	return 0
+}
+
+func (x *TrainBatchResponse) GetActorLoss() float32 {
+	if x != nil {
+		return x.ActorLoss
+	}
+	return 0
+}
+
+func (x *TrainBatchResponse) GetCriticLoss() float32 {
+	if x != nil {
+		return x.CriticLoss
+	}
+	return 0
+}
+
+func (x *TrainBatchResponse) GetAlphaLoss() float32 {
+	if x != nil {
+		return x.AlphaLoss
+	}
+	return 0
+}
+
+func (x *TrainBatchResponse) GetEntropy() float32 {
+	if x != nil {
+		return x.Entropy
+	}
+	return 0
+}
+
+func (x *TrainBatchResponse) GetTrainingStep() uint64 {
+	if x != nil {
+		return x.TrainingStep
+	}
+	return 0
 }
 
 type HealthCheckRequest struct {
@@ -284,6 +324,9 @@ func (*HealthCheckRequest) Descriptor() ([]byte, []int) {
 type HealthCheckResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Ready         bool                   `protobuf:"varint,1,opt,name=ready,proto3" json:"ready,omitempty"`
+	PolicyVersion uint64                 `protobuf:"varint,2,opt,name=policy_version,json=policyVersion,proto3" json:"policy_version,omitempty"`
+	TrainingStep  uint64                 `protobuf:"varint,3,opt,name=training_step,json=trainingStep,proto3" json:"training_step,omitempty"`
+	Device        string                 `protobuf:"bytes,4,opt,name=device,proto3" json:"device,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -325,6 +368,27 @@ func (x *HealthCheckResponse) GetReady() bool {
 	return false
 }
 
+func (x *HealthCheckResponse) GetPolicyVersion() uint64 {
+	if x != nil {
+		return x.PolicyVersion
+	}
+	return 0
+}
+
+func (x *HealthCheckResponse) GetTrainingStep() uint64 {
+	if x != nil {
+		return x.TrainingStep
+	}
+	return 0
+}
+
+func (x *HealthCheckResponse) GetDevice() string {
+	if x != nil {
+		return x.Device
+	}
+	return ""
+}
+
 var File_learner_v1_learner_proto protoreflect.FileDescriptor
 
 const file_learner_v1_learner_proto_rawDesc = "" +
@@ -334,20 +398,31 @@ const file_learner_v1_learner_proto_rawDesc = "" +
 	"\x13PredictBatchRequest\x12C\n" +
 	"\venvironment\x18\x01 \x01(\v2!.learner.v1.EnvironmentDescriptorR\venvironment\x12)\n" +
 	"\x06states\x18\x02 \x03(\v2\x11.learner.v1.StateR\x06states\x12%\n" +
-	"\x0epolicy_version\x18\x03 \x01(\tR\rpolicyVersion\"k\n" +
+	"\x0epolicy_version\x18\x03 \x01(\x04R\rpolicyVersion\"k\n" +
 	"\x14PredictBatchResponse\x12,\n" +
 	"\aactions\x18\x01 \x03(\v2\x12.learner.v1.ActionR\aactions\x12%\n" +
-	"\x0epolicy_version\x18\x02 \x01(\tR\rpolicyVersion\"m\n" +
+	"\x0epolicy_version\x18\x02 \x01(\x04R\rpolicyVersion\"m\n" +
 	"\x11TrainBatchRequest\x121\n" +
 	"\x05batch\x18\x01 \x01(\v2\x1b.learner.v1.TransitionBatchR\x05batch\x12%\n" +
-	"\x0epolicy_version\x18\x02 \x01(\tR\rpolicyVersion\"z\n" +
+	"\x0epolicy_version\x18\x02 \x01(\x04R\rpolicyVersion\"\x98\x02\n" +
 	"\x12TrainBatchResponse\x12\x1a\n" +
 	"\baccepted\x18\x01 \x01(\bR\baccepted\x12!\n" +
 	"\fsamples_seen\x18\x02 \x01(\x04R\vsamplesSeen\x12%\n" +
-	"\x0epolicy_version\x18\x03 \x01(\tR\rpolicyVersion\"\x14\n" +
-	"\x12HealthCheckRequest\"+\n" +
+	"\x0epolicy_version\x18\x03 \x01(\x04R\rpolicyVersion\x12\x1d\n" +
+	"\n" +
+	"actor_loss\x18\x04 \x01(\x02R\tactorLoss\x12\x1f\n" +
+	"\vcritic_loss\x18\x05 \x01(\x02R\n" +
+	"criticLoss\x12\x1d\n" +
+	"\n" +
+	"alpha_loss\x18\x06 \x01(\x02R\talphaLoss\x12\x18\n" +
+	"\aentropy\x18\a \x01(\x02R\aentropy\x12#\n" +
+	"\rtraining_step\x18\b \x01(\x04R\ftrainingStep\"\x14\n" +
+	"\x12HealthCheckRequest\"\x8f\x01\n" +
 	"\x13HealthCheckResponse\x12\x14\n" +
-	"\x05ready\x18\x01 \x01(\bR\x05ready2\x80\x02\n" +
+	"\x05ready\x18\x01 \x01(\bR\x05ready\x12%\n" +
+	"\x0epolicy_version\x18\x02 \x01(\x04R\rpolicyVersion\x12#\n" +
+	"\rtraining_step\x18\x03 \x01(\x04R\ftrainingStep\x12\x16\n" +
+	"\x06device\x18\x04 \x01(\tR\x06device2\x80\x02\n" +
 	"\x0eLearnerService\x12Q\n" +
 	"\fPredictBatch\x12\x1f.learner.v1.PredictBatchRequest\x1a .learner.v1.PredictBatchResponse\x12K\n" +
 	"\n" +

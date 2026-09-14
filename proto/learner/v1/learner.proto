@@ -10,29 +10,37 @@ option go_package = "github.com/duongess/khoai-robot-control-framework/gen/go/le
 message PredictBatchRequest {
   EnvironmentDescriptor environment = 1;
   repeated State states = 2;
-  string policy_version = 3;
+  uint64 policy_version = 3;
 }
 
 message PredictBatchResponse {
   repeated Action actions = 1;
-  string policy_version = 2;
+  uint64 policy_version = 2;
 }
 
 message TrainBatchRequest {
   TransitionBatch batch = 1;
-  string policy_version = 2;
+  uint64 policy_version = 2;
 }
 
 message TrainBatchResponse {
   bool accepted = 1;
   uint64 samples_seen = 2;
-  string policy_version = 3;
+  uint64 policy_version = 3;
+  float actor_loss = 4;
+  float critic_loss = 5;
+  float alpha_loss = 6;
+  float entropy = 7;
+  uint64 training_step = 8;
 }
 
 message HealthCheckRequest {}
 
 message HealthCheckResponse {
   bool ready = 1;
+  uint64 policy_version = 2;
+  uint64 training_step = 3;
+  string device = 4;
 }
 
 service LearnerService {

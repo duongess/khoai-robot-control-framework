@@ -33,17 +33,17 @@ func (s *learnerServiceStub) PredictBatch(_ context.Context, request *learnerv1.
 
 func (s *learnerServiceStub) TrainBatch(_ context.Context, request *learnerv1.TrainBatchRequest) (*learnerv1.TrainBatchResponse, error) {
 	s.trainRequest = request
-	return &learnerv1.TrainBatchResponse{Accepted: true, SamplesSeen: uint64(len(request.Batch.Transitions)), PolicyVersion: "test"}, nil
+	return &learnerv1.TrainBatchResponse{Accepted: true, SamplesSeen: uint64(len(request.Batch.Transitions)), PolicyVersion: 7}, nil
 }
 
 func TestLearnerClientHealthCheck(t *testing.T) {
 	client, _ := newTestLearnerClient(t)
 
-	ready, err := client.HealthCheck(context.Background())
+	health, err := client.HealthCheck(context.Background())
 	if err != nil {
 		t.Fatalf("HealthCheck() error = %v", err)
 	}
-	if !ready {
+	if !health.Ready {
 		t.Fatal("HealthCheck() ready = false")
 	}
 }
@@ -51,15 +51,15 @@ func TestLearnerClientHealthCheck(t *testing.T) {
 func TestLearnerClientPredictBatchMapsStatesAndActions(t *testing.T) {
 	client, service := newTestLearnerClient(t)
 
-	actions, err := client.PredictBatch(context.Background(), []State{{1, 2}, {3, 4}})
+	prediction, err := client.PredictBatch(context.Background(), []State{{1, 2}, {3, 4}})
 	if err != nil {
 		t.Fatalf("PredictBatch() error = %v", err)
 	}
 	if len(service.predictRequest.States) != 2 || service.predictRequest.States[0].Values[0] != 1 {
 		t.Fatalf("PredictBatch() request = %#v", service.predictRequest)
 	}
-	if len(actions) != 2 || actions[0][0] != 0.5 || actions[1][0] != 0.5 {
-		t.Fatalf("PredictBatch() actions = %#v", actions)
+	if len(prediction.Actions) != 2 || prediction.Actions[0][0] != 0.5 || prediction.Actions[1][0] != 0.5 {
+		t.Fatalf("PredictBatch() actions = %#v", prediction.Actions)
 	}
 }
 
@@ -80,7 +80,7 @@ func TestLearnerClientTrainBatchMapsTransition(t *testing.T) {
 	if !transition.Terminated || transition.Reward != 2 || transition.State.Values[0] != 1 || transition.NextState.Values[0] != 3 {
 		t.Fatalf("TrainBatch() transition = %#v", transition)
 	}
-	if !result.Accepted || result.SamplesSeen != 1 || result.PolicyVersion != "test" {
+	if !result.Accepted || result.SamplesSeen != 1 || result.PolicyVersion != 7 {
 		t.Fatalf("TrainBatch() result = %#v", result)
 	}
 }

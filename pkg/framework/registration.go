@@ -1,23 +1,36 @@
 package framework
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"math"
 	"reflect"
 	"regexp"
+	"sync"
 )
 
 var taskNamePattern = regexp.MustCompile(`^[a-z][a-z0-9_-]*$`)
 
 // Runtime stores public task registrations.
 type Runtime struct {
-	tasks map[string]TaskRegistration
+	mu             sync.RWMutex
+	tasks          map[string]TaskRegistration
+	config         RuntimeConfig
+	learner        Learner
+	activeTaskName string
+	workers        []*runtimeWorker
+	replay         *ReplayBuffer
+	status         RuntimeStatus
+	cancel         context.CancelFunc
+	done           chan struct{}
+	metrics        runtimeMetrics
+	lastError      string
 }
 
 // NewRuntime creates an empty task runtime.
 func NewRuntime() *Runtime {
-	return &Runtime{tasks: make(map[string]TaskRegistration)}
+	return &Runtime{tasks: make(map[string]TaskRegistration), config: DefaultRuntimeConfig(), status: RuntimeStopped}
 }
 
 // RegisterTask validates and stores a task registration.
@@ -28,6 +41,8 @@ func (r *Runtime) RegisterTask(registration TaskRegistration) error {
 	if err := validateTaskRegistration(registration); err != nil {
 		return err
 	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if r.tasks == nil {
 		r.tasks = make(map[string]TaskRegistration)
 	}
@@ -36,6 +51,44 @@ func (r *Runtime) RegisterTask(registration TaskRegistration) error {
 	}
 
 	r.tasks[registration.Descriptor.Name] = registration
+	if r.activeTaskName == "" {
+		r.activeTaskName = registration.Descriptor.Name
+	}
+	return nil
+}
+
+// ReplaceTask updates a registered task while the runtime is not stepping.
+func (r *Runtime) ReplaceTask(registration TaskRegistration) error {
+	if r == nil {
+		return errors.New("runtime is nil")
+	}
+	if err := validateTaskRegistration(registration); err != nil {
+		return err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.status == RuntimeRunning {
+		return errors.New("runtime must be paused before replacing a task")
+	}
+	if r.tasks == nil {
+		r.tasks = make(map[string]TaskRegistration)
+	}
+	r.tasks[registration.Descriptor.Name] = registration
+	r.activeTaskName = registration.Descriptor.Name
+	for _, worker := range r.workers {
+		task, err := registration.Factory.Create()
+		if err != nil {
+			return fmt.Errorf("replace worker %d task: %w", worker.id, err)
+		}
+		state, err := task.Reset()
+		if err != nil {
+			return fmt.Errorf("reset replacement worker %d task: %w", worker.id, err)
+		}
+		if len(state) != registration.Descriptor.StateDimension {
+			return fmt.Errorf("replacement worker %d returned state dimension %d, want %d", worker.id, len(state), registration.Descriptor.StateDimension)
+		}
+		worker.task, worker.state, worker.episodeID, worker.episodeStep, worker.outcome = task, append(State(nil), state...), worker.episodeID+1, 0, OutcomeRunning
+	}
 	return nil
 }
 
