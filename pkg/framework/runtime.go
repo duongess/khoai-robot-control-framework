@@ -14,62 +14,73 @@ const (
 	RuntimeStopped RuntimeStatus = "stopped"
 	RuntimeRunning RuntimeStatus = "running"
 	RuntimePaused  RuntimeStatus = "paused"
+	RuntimeStalled RuntimeStatus = "stalled"
 	RuntimeError   RuntimeStatus = "error"
 )
 
 type runtimeWorker struct {
-	id          int
-	task        Task
-	episodeID   uint64
-	episodeStep uint64
-	state       State
-	lastAction  Action
-	lastReward  float32
-	outcome     Outcome
+	id            int
+	task          Task
+	episodeID     uint64
+	episodeStep   uint64
+	state         State
+	lastAction    Action
+	lastReward    float32
+	episodeReward float64
+	outcome       Outcome
 }
 
 type runtimeMetrics struct {
-	totalSteps      uint64
-	totalEpisodes   uint64
-	successes       uint64
-	totalReward     float64
-	trainingBatches uint64
-	policyVersion   uint64
-	trainingStep    uint64
-	actorLoss       float32
-	criticLoss      float32
-	alphaLoss       float32
-	entropy         float32
-	startedAt       time.Time
+	totalSteps        uint64
+	totalEpisodes     uint64
+	successes         uint64
+	totalReward       float64
+	trainingBatches   uint64
+	policyVersion     uint64
+	trainingStep      uint64
+	actorLoss         float32
+	criticLoss        float32
+	alphaLoss         float32
+	entropy           float32
+	startedAt         time.Time
+	lastProgressAt    time.Time
+	rateStartedAt     time.Time
+	rateStartSteps    uint64
+	rateStartEpisodes uint64
+	stepsPerSecond    float64
+	episodesPerSecond float64
 }
 
 type WorkerSnapshot struct {
-	ID          int     `json:"id"`
-	EpisodeID   uint64  `json:"episode_id"`
-	EpisodeStep uint64  `json:"episode_step"`
-	State       State   `json:"state"`
-	LastAction  Action  `json:"last_action"`
-	LastReward  float32 `json:"last_reward"`
-	Outcome     Outcome `json:"outcome"`
+	ID            int     `json:"id"`
+	EpisodeID     uint64  `json:"episode_id"`
+	EpisodeStep   uint64  `json:"episode_step"`
+	State         State   `json:"state"`
+	LastAction    Action  `json:"last_action"`
+	LastReward    float32 `json:"last_reward"`
+	EpisodeReward float64 `json:"episode_reward"`
+	Outcome       Outcome `json:"outcome"`
 }
 
 type RuntimeSnapshot struct {
-	Status           RuntimeStatus    `json:"status"`
-	ActiveWorkers    int              `json:"active_workers"`
-	TotalSteps       uint64           `json:"total_steps"`
-	TotalEpisodes    uint64           `json:"total_episodes"`
-	SuccessRate      float64          `json:"success_rate"`
-	AverageReward    float64          `json:"average_reward"`
-	ReplayBufferSize int              `json:"replay_buffer_size"`
-	TrainingBatches  uint64           `json:"training_batches"`
-	PolicyVersion    uint64           `json:"policy_version"`
-	TrainingStep     uint64           `json:"training_step"`
-	ActorLoss        float32          `json:"actor_loss"`
-	CriticLoss       float32          `json:"critic_loss"`
-	AlphaLoss        float32          `json:"alpha_loss"`
-	Entropy          float32          `json:"entropy"`
-	LastError        string           `json:"last_error"`
-	Workers          []WorkerSnapshot `json:"workers"`
+	Status            RuntimeStatus    `json:"status"`
+	ActiveWorkers     int              `json:"active_workers"`
+	TotalSteps        uint64           `json:"total_steps"`
+	TotalEpisodes     uint64           `json:"total_episodes"`
+	SuccessRate       float64          `json:"success_rate"`
+	AverageReward     float64          `json:"average_reward"`
+	ReplayBufferSize  int              `json:"replay_buffer_size"`
+	TrainingBatches   uint64           `json:"training_batches"`
+	PolicyVersion     uint64           `json:"policy_version"`
+	TrainingStep      uint64           `json:"training_step"`
+	ActorLoss         float32          `json:"actor_loss"`
+	CriticLoss        float32          `json:"critic_loss"`
+	AlphaLoss         float32          `json:"alpha_loss"`
+	Entropy           float32          `json:"entropy"`
+	StepsPerSecond    float64          `json:"steps_per_second"`
+	EpisodesPerSecond float64          `json:"episodes_per_second"`
+	LastError         string           `json:"last_error"`
+	Workers           []WorkerSnapshot `json:"workers"`
 }
 
 // Configure attaches the learner and runtime settings before Start.
@@ -143,7 +154,10 @@ func (r *Runtime) Start(ctx context.Context) error {
 	}
 	loopContext, cancel := context.WithCancel(ctx)
 	r.workers, r.cancel, r.done, r.status, r.lastError = workers, cancel, make(chan struct{}), RuntimeRunning, ""
-	r.metrics.startedAt = time.Now()
+	now := time.Now()
+	r.metrics.startedAt, r.metrics.lastProgressAt, r.metrics.rateStartedAt = now, now, now
+	r.metrics.rateStartSteps, r.metrics.rateStartEpisodes = r.metrics.totalSteps, r.metrics.totalEpisodes
+	r.metrics.stepsPerSecond, r.metrics.episodesPerSecond = 0, 0
 	done := r.done
 	r.mu.Unlock()
 	go r.run(loopContext, done, registration.Descriptor)
@@ -221,6 +235,7 @@ func (r *Runtime) cycle(ctx context.Context, descriptor TaskDescriptor) {
 		r.replay.Add(transition)
 		worker.lastAction, worker.lastReward, worker.outcome = append(Action(nil), action...), result.Reward, result.Outcome
 		worker.episodeStep++
+		worker.episodeReward += float64(result.Reward)
 		r.metrics.totalSteps++
 		r.metrics.totalReward += float64(result.Reward)
 		if result.Done {
@@ -234,11 +249,12 @@ func (r *Runtime) cycle(ctx context.Context, descriptor TaskDescriptor) {
 				r.status = RuntimeError
 				return
 			}
-			worker.state, worker.episodeID, worker.episodeStep, worker.outcome = append(State(nil), state...), worker.episodeID+1, 0, OutcomeRunning
+			worker.state, worker.episodeID, worker.episodeStep, worker.episodeReward, worker.outcome = append(State(nil), state...), worker.episodeID+1, 0, 0, OutcomeRunning
 		} else {
 			worker.state = append(State(nil), result.State...)
 		}
 	}
+	r.updateRates(time.Now())
 	shouldTrain := r.replay.Len() >= r.config.WarmupTransitions && r.metrics.totalSteps%uint64(r.config.TrainingInterval) == 0
 	if shouldTrain {
 		sample, sampleErr := r.replay.Sample(r.config.TrainingBatchSize)
@@ -277,6 +293,7 @@ func (r *Runtime) Resume() error {
 		return errors.New("runtime is not paused")
 	}
 	r.status = RuntimeRunning
+	r.metrics.lastProgressAt = time.Now()
 	return nil
 }
 func (r *Runtime) Reset() error {
@@ -290,7 +307,7 @@ func (r *Runtime) Reset() error {
 		if err != nil {
 			return err
 		}
-		worker.state, worker.episodeID, worker.episodeStep, worker.outcome = append(State(nil), state...), worker.episodeID+1, 0, OutcomeRunning
+		worker.state, worker.episodeID, worker.episodeStep, worker.episodeReward, worker.outcome = append(State(nil), state...), worker.episodeID+1, 0, 0, OutcomeRunning
 	}
 	return nil
 }
@@ -317,7 +334,11 @@ func (r *Runtime) fail(err error) {
 func (r *Runtime) Snapshot() RuntimeSnapshot {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	snapshot := RuntimeSnapshot{Status: r.status, TotalSteps: r.metrics.totalSteps, TotalEpisodes: r.metrics.totalEpisodes, TrainingBatches: r.metrics.trainingBatches, PolicyVersion: r.metrics.policyVersion, TrainingStep: r.metrics.trainingStep, ActorLoss: r.metrics.actorLoss, CriticLoss: r.metrics.criticLoss, AlphaLoss: r.metrics.alphaLoss, Entropy: r.metrics.entropy, LastError: r.lastError, ActiveWorkers: len(r.workers)}
+	status := r.status
+	if status == RuntimeRunning && !r.metrics.lastProgressAt.IsZero() && time.Since(r.metrics.lastProgressAt) > 5*time.Second {
+		status = RuntimeStalled
+	}
+	snapshot := RuntimeSnapshot{Status: status, TotalSteps: r.metrics.totalSteps, TotalEpisodes: r.metrics.totalEpisodes, TrainingBatches: r.metrics.trainingBatches, PolicyVersion: r.metrics.policyVersion, TrainingStep: r.metrics.trainingStep, ActorLoss: r.metrics.actorLoss, CriticLoss: r.metrics.criticLoss, AlphaLoss: r.metrics.alphaLoss, Entropy: r.metrics.entropy, StepsPerSecond: r.metrics.stepsPerSecond, EpisodesPerSecond: r.metrics.episodesPerSecond, LastError: r.lastError, ActiveWorkers: len(r.workers)}
 	if r.replay != nil {
 		snapshot.ReplayBufferSize = r.replay.Len()
 	}
@@ -329,7 +350,22 @@ func (r *Runtime) Snapshot() RuntimeSnapshot {
 	}
 	snapshot.Workers = make([]WorkerSnapshot, len(r.workers))
 	for i, worker := range r.workers {
-		snapshot.Workers[i] = WorkerSnapshot{ID: worker.id, EpisodeID: worker.episodeID, EpisodeStep: worker.episodeStep, State: append(State(nil), worker.state...), LastAction: append(Action(nil), worker.lastAction...), LastReward: worker.lastReward, Outcome: worker.outcome}
+		snapshot.Workers[i] = WorkerSnapshot{ID: worker.id, EpisodeID: worker.episodeID, EpisodeStep: worker.episodeStep, State: append(State(nil), worker.state...), LastAction: append(Action(nil), worker.lastAction...), LastReward: worker.lastReward, EpisodeReward: worker.episodeReward, Outcome: worker.outcome}
 	}
 	return snapshot
+}
+
+func (r *Runtime) updateRates(now time.Time) {
+	r.metrics.lastProgressAt = now
+	if r.metrics.rateStartedAt.IsZero() {
+		r.metrics.rateStartedAt, r.metrics.rateStartSteps, r.metrics.rateStartEpisodes = now, r.metrics.totalSteps, r.metrics.totalEpisodes
+		return
+	}
+	elapsed := now.Sub(r.metrics.rateStartedAt)
+	if elapsed < 250*time.Millisecond {
+		return
+	}
+	r.metrics.stepsPerSecond = float64(r.metrics.totalSteps-r.metrics.rateStartSteps) / elapsed.Seconds()
+	r.metrics.episodesPerSecond = float64(r.metrics.totalEpisodes-r.metrics.rateStartEpisodes) / elapsed.Seconds()
+	r.metrics.rateStartedAt, r.metrics.rateStartSteps, r.metrics.rateStartEpisodes = now, r.metrics.totalSteps, r.metrics.totalEpisodes
 }
