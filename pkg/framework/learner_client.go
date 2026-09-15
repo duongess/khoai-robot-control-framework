@@ -17,7 +17,10 @@ const DefaultLearnerAddress = "127.0.0.1:50051"
 // Learner is the framework-owned abstraction for the SAC transport.
 type Learner interface {
 	HealthCheck(context.Context) (HealthStatus, error)
-	PredictBatch(context.Context, []State) (PredictionResult, error)
+	// PredictBatch evaluates states with policyVersion. Zero asks the learner
+	// for its latest immutable snapshot; callers pin the returned version for
+	// the rest of an episode.
+	PredictBatch(context.Context, []State, uint64) (PredictionResult, error)
 	TrainBatch(context.Context, []Transition) (TrainingResult, error)
 	Close() error
 }
@@ -91,11 +94,11 @@ func (c *LearnerClient) HealthCheck(ctx context.Context) (HealthStatus, error) {
 	return HealthStatus{Ready: response.GetReady(), PolicyVersion: response.GetPolicyVersion(), TrainingStep: response.GetTrainingStep(), Device: response.GetDevice()}, nil
 }
 
-func (c *LearnerClient) PredictBatch(ctx context.Context, states []State) (PredictionResult, error) {
+func (c *LearnerClient) PredictBatch(ctx context.Context, states []State, policyVersion uint64) (PredictionResult, error) {
 	if len(states) == 0 {
 		return PredictionResult{}, errors.New("predict batch requires at least one state")
 	}
-	request := &learnerv1.PredictBatchRequest{States: make([]*learnerv1.State, len(states))}
+	request := &learnerv1.PredictBatchRequest{States: make([]*learnerv1.State, len(states)), PolicyVersion: policyVersion}
 	for index, state := range states {
 		if err := validateFinite("state", state); err != nil {
 			return PredictionResult{}, fmt.Errorf("predict batch state %d: %w", index, err)

@@ -25,16 +25,18 @@ func (runtimeTestFactory) Create() (Task, error) { return &runtimeTestTask{}, ni
 type runtimeTestLearner struct {
 	mu                     sync.Mutex
 	predictions, trainings int
+	requestedVersions      []uint64
 	action                 Action
 }
 
 func (l *runtimeTestLearner) HealthCheck(context.Context) (HealthStatus, error) {
 	return HealthStatus{Ready: true}, nil
 }
-func (l *runtimeTestLearner) PredictBatch(_ context.Context, states []State) (PredictionResult, error) {
+func (l *runtimeTestLearner) PredictBatch(_ context.Context, states []State, requestedVersion uint64) (PredictionResult, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.predictions++
+	l.requestedVersions = append(l.requestedVersions, requestedVersion)
 	actions := make([]Action, len(states))
 	for i := range actions {
 		if l.action != nil {
@@ -43,7 +45,10 @@ func (l *runtimeTestLearner) PredictBatch(_ context.Context, states []State) (Pr
 			actions[i] = Action{0.1}
 		}
 	}
-	return PredictionResult{Actions: actions, PolicyVersion: 1}, nil
+	if requestedVersion == 0 {
+		requestedVersion = 1
+	}
+	return PredictionResult{Actions: actions, PolicyVersion: requestedVersion}, nil
 }
 func (l *runtimeTestLearner) TrainBatch(_ context.Context, transitions []Transition) (TrainingResult, error) {
 	l.mu.Lock()
@@ -117,6 +122,19 @@ func TestRuntimeBatchesWorkersAndSupportsPauseResume(t *testing.T) {
 	runtime.Stop()
 	if learner.predictions == 0 {
 		t.Fatal("runtime did not issue batched predictions")
+	}
+	if got := runtime.Snapshot().Workers[0].PolicyVersion; got != 1 {
+		t.Fatalf("worker episode policy version = %d, want 1", got)
+	}
+	learner.mu.Lock()
+	defer learner.mu.Unlock()
+	if len(learner.requestedVersions) < 2 || learner.requestedVersions[0] != 0 {
+		t.Fatalf("policy snapshot requests = %v, want initial latest then pinned version", learner.requestedVersions)
+	}
+	for _, version := range learner.requestedVersions[1:] {
+		if version != 1 {
+			t.Fatalf("episode changed policy snapshot: requests=%v", learner.requestedVersions)
+		}
 	}
 }
 

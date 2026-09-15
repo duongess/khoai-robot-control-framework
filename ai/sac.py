@@ -43,9 +43,14 @@ class SACAgent:
         self.alpha_optimizer = torch.optim.Adam([self.log_alpha], lr=config.learning_rate)
 
     def act(self, states: torch.Tensor, deterministic: bool = True) -> torch.Tensor:
+        """Evaluate the currently trainable actor."""
+        return self.act_with_actor(self.actor, states, deterministic=deterministic)
+
+    def act_with_actor(self, actor: nn.Module, states: torch.Tensor, deterministic: bool = True) -> torch.Tensor:
+        """Evaluate an immutable actor snapshot without touching live weights."""
         self._validate_states(states)
         with torch.no_grad():
-            actions, _ = self.actor.sample(states.to(self.device), deterministic=deterministic)
+            actions, _ = actor.sample(states.to(self.device), deterministic=deterministic)
         return actions.cpu()
 
     def update(self, batch: TensorBatch) -> dict[str, float]:
@@ -90,6 +95,7 @@ class SACAgent:
 
     @staticmethod
     def _build_actor(config: SACConfig) -> nn.Module:
+        print(config.controller_type)
         if config.controller_type == "mlp":
             return GaussianActor(config.state_dim, config.action_dim, config.hidden_dim)
         graph = ConnectomeGraph.load(config.graph_path or "")
@@ -108,6 +114,7 @@ class SACAgent:
         )
         if config.controller_type == "random_graph":
             return RandomGraphPolicy(**arguments, seed=config.seed)
+            
         return FlyConnectomePolicy(**arguments)
 
     def _prepare_batch(self, batch: TensorBatch) -> tuple[torch.Tensor, ...]:

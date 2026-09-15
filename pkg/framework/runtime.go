@@ -27,8 +27,12 @@ type runtimeWorker struct {
 	lastAction    Action
 	lastReward    float32
 	episodeReward float64
-	lastInfo      map[string]float32
-	outcome       Outcome
+	// episodePolicyVersion is assigned by the first prediction of an episode.
+	// Training may continue in parallel, but it cannot change this episode's
+	// policy snapshot.
+	episodePolicyVersion uint64
+	lastInfo             map[string]float32
+	outcome              Outcome
 }
 
 type runtimeMetrics struct {
@@ -53,15 +57,16 @@ type runtimeMetrics struct {
 }
 
 type WorkerSnapshot struct {
-	ID            int     `json:"id"`
-	EpisodeID     uint64  `json:"episode_id"`
-	EpisodeStep   uint64  `json:"episode_step"`
-	State         State   `json:"state"`
-	LastAction    Action  `json:"last_action"`
-	LastReward    float32 `json:"last_reward"`
-	EpisodeReward float64 `json:"episode_reward"`
+	ID            int                `json:"id"`
+	EpisodeID     uint64             `json:"episode_id"`
+	EpisodeStep   uint64             `json:"episode_step"`
+	State         State              `json:"state"`
+	LastAction    Action             `json:"last_action"`
+	LastReward    float32            `json:"last_reward"`
+	EpisodeReward float64            `json:"episode_reward"`
+	PolicyVersion uint64             `json:"policy_version"`
 	Info          map[string]float32 `json:"info,omitempty"`
-	Outcome       Outcome `json:"outcome"`
+	Outcome       Outcome            `json:"outcome"`
 }
 
 type RuntimeSnapshot struct {
@@ -187,29 +192,59 @@ func (r *Runtime) run(ctx context.Context, done chan struct{}, descriptor TaskDe
 
 func (r *Runtime) cycle(ctx context.Context, descriptor TaskDescriptor) {
 	r.mu.RLock()
-	states := make([]State, len(r.workers))
+	groups := make(map[uint64][]int)
 	for i, worker := range r.workers {
-		states[i] = append(State(nil), worker.state...)
+		groups[worker.episodePolicyVersion] = append(groups[worker.episodePolicyVersion], i)
 	}
 	learner := r.learner
 	r.mu.RUnlock()
-	prediction, err := learner.PredictBatch(ctx, states)
-	if err != nil {
-		r.fail(fmt.Errorf("predict actions: %w", err))
-		return
+
+	type indexedPrediction struct {
+		action  Action
+		version uint64
 	}
-	if len(prediction.Actions) != len(states) {
-		r.fail(fmt.Errorf("predict actions returned %d actions for %d workers", len(prediction.Actions), len(states)))
-		return
+	predictions := make(map[int]indexedPrediction, len(r.workers))
+	for requestedVersion, indexes := range groups {
+		states := make([]State, len(indexes))
+		r.mu.RLock()
+		for position, index := range indexes {
+			states[position] = append(State(nil), r.workers[index].state...)
+		}
+		r.mu.RUnlock()
+		prediction, err := learner.PredictBatch(ctx, states, requestedVersion)
+		if err != nil {
+			r.fail(fmt.Errorf("predict actions for policy version %d: %w", requestedVersion, err))
+			return
+		}
+		if len(prediction.Actions) != len(states) {
+			r.fail(fmt.Errorf("predict actions returned %d actions for %d workers", len(prediction.Actions), len(states)))
+			return
+		}
+		if requestedVersion != 0 && prediction.PolicyVersion != requestedVersion {
+			r.fail(fmt.Errorf("learner returned policy version %d for pinned version %d", prediction.PolicyVersion, requestedVersion))
+			return
+		}
+		for position, index := range indexes {
+			predictions[index] = indexedPrediction{action: prediction.Actions[position], version: prediction.PolicyVersion}
+		}
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.status != RuntimeRunning {
 		return
 	}
-	r.metrics.policyVersion = prediction.PolicyVersion
 	for index, worker := range r.workers {
-		action := prediction.Actions[index]
+		prediction, exists := predictions[index]
+		if !exists {
+			r.lastError = fmt.Sprintf("worker %d has no prediction", worker.id)
+			r.status = RuntimeError
+			return
+		}
+		if worker.episodePolicyVersion == 0 {
+			worker.episodePolicyVersion = prediction.version
+		}
+		r.metrics.policyVersion = prediction.version
+		action := prediction.action
 		if len(action) != descriptor.ActionDimension {
 			r.lastError = fmt.Sprintf("worker %d received action dimension %d, want %d", worker.id, len(action), descriptor.ActionDimension)
 			r.status = RuntimeError
@@ -251,7 +286,7 @@ func (r *Runtime) cycle(ctx context.Context, descriptor TaskDescriptor) {
 				r.status = RuntimeError
 				return
 			}
-			worker.state, worker.episodeID, worker.episodeStep, worker.episodeReward, worker.lastInfo, worker.outcome = append(State(nil), state...), worker.episodeID+1, 0, 0, nil, OutcomeRunning
+			worker.state, worker.episodeID, worker.episodeStep, worker.episodeReward, worker.episodePolicyVersion, worker.lastInfo, worker.outcome = append(State(nil), state...), worker.episodeID+1, 0, 0, 0, nil, OutcomeRunning
 		} else {
 			worker.state = append(State(nil), result.State...)
 		}
@@ -352,7 +387,7 @@ func (r *Runtime) Snapshot() RuntimeSnapshot {
 	}
 	snapshot.Workers = make([]WorkerSnapshot, len(r.workers))
 	for i, worker := range r.workers {
-		snapshot.Workers[i] = WorkerSnapshot{ID: worker.id, EpisodeID: worker.episodeID, EpisodeStep: worker.episodeStep, State: append(State(nil), worker.state...), LastAction: append(Action(nil), worker.lastAction...), LastReward: worker.lastReward, EpisodeReward: worker.episodeReward, Info: cloneInfo(worker.lastInfo), Outcome: worker.outcome}
+		snapshot.Workers[i] = WorkerSnapshot{ID: worker.id, EpisodeID: worker.episodeID, EpisodeStep: worker.episodeStep, State: append(State(nil), worker.state...), LastAction: append(Action(nil), worker.lastAction...), LastReward: worker.lastReward, EpisodeReward: worker.episodeReward, PolicyVersion: worker.episodePolicyVersion, Info: cloneInfo(worker.lastInfo), Outcome: worker.outcome}
 	}
 	return snapshot
 }

@@ -4,7 +4,9 @@ import json
 import logging
 import signal
 import sys
+import threading
 from concurrent import futures
+from copy import deepcopy
 from pathlib import Path
 
 import grpc
@@ -66,30 +68,52 @@ class LearnerServicer(learner_pb2_grpc.LearnerServiceServicer):
             max_gripper_command=self._config.max_gripper_command,
         ))
         self._samples_seen = 0
-        self._policy_version = 0
+        # Version zero is reserved by the protocol for "latest". Every actual
+        # episode therefore receives a positive, immutable snapshot ID.
+        self._policy_version = 1
+        self._actor_snapshots = {self._policy_version: deepcopy(self._agent.actor).eval()}
+        self._policy_lock = threading.RLock()
         self._training_step = 0
 
     def PredictBatch(self, request, context):
         try:
             states = self._states_to_tensor(request.states, "states")
-            predicted_actions = self._agent.act(states, deterministic=True).clamp(-1, 1)
+            # SAC must sample actions while it is collecting replay data. A
+            # deterministic, untrained actor repeats one arbitrary vector (for
+            # example, simultaneous right/down motion) and never explores a
+            # corrective action. Evaluation can opt in explicitly via
+            # LEARNER_DETERMINISTIC_INFERENCE=true.
+            with self._policy_lock:
+                requested_version = request.policy_version
+                served_version = self._policy_version if requested_version == 0 else requested_version
+                actor = self._actor_snapshots.get(served_version)
+                if actor is None:
+                    context.abort(
+                        grpc.StatusCode.FAILED_PRECONDITION,
+                        f"policy snapshot {served_version} is unavailable; start a fresh episode",
+                    )
+                predicted_actions = self._agent.act_with_actor(
+                    actor, states, deterministic=self._config.deterministic_inference
+                ).clamp(-1, 1)
         except ValueError as error:
             context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(error))
         actions = [environment_pb2.Action(values=[float(value) for value in action]) for action in predicted_actions]
-        LOGGER.info("predict_batch", extra={"fields": {"states": len(request.states)}})
-        return learner_pb2.PredictBatchResponse(actions=actions, policy_version=self._policy_version)
+        LOGGER.info("predict_batch", extra={"fields": {"states": len(request.states), "requested_policy_version": request.policy_version, "policy_version": served_version, "deterministic": self._config.deterministic_inference}})
+        return learner_pb2.PredictBatchResponse(actions=actions, policy_version=served_version)
 
     def TrainBatch(self, request, context):
         if not request.HasField("batch"):
             context.abort(grpc.StatusCode.INVALID_ARGUMENT, "transition batch is required")
         try:
             batch = self._batch_to_tensors(request.batch.transitions)
-            metrics = self._agent.update(batch)
+            with self._policy_lock:
+                metrics = self._agent.update(batch)
+                self._policy_version += 1
+                self._actor_snapshots[self._policy_version] = deepcopy(self._agent.actor).eval()
         except ValueError as error:
             context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(error))
         self._samples_seen += len(request.batch.transitions)
         self._training_step += 1
-        self._policy_version += 1
         LOGGER.info("train_batch", extra={"fields": {"received": len(request.batch.transitions), "samples_seen": self._samples_seen, **metrics}})
         return learner_pb2.TrainBatchResponse(accepted=True, samples_seen=self._samples_seen, policy_version=self._policy_version, actor_loss=metrics["actor_loss"], critic_loss=(metrics["critic_one_loss"] + metrics["critic_two_loss"]) / 2, alpha_loss=metrics["alpha_loss"], entropy=metrics["entropy"], training_step=self._training_step)
 

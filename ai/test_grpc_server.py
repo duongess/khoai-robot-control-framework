@@ -1,6 +1,7 @@
 import math
 
 import pytest
+import torch
 
 from ai.config import LearnerConfig
 from ai.grpc_server import LearnerServicer
@@ -29,10 +30,42 @@ def test_prediction_rejects_invalid_and_non_finite_states():
         servicer.PredictBatch(learner_pb2.PredictBatchRequest(states=[environment_pb2.State(values=[math.nan, 0.0, 0.0])]), AbortContext())
 
 
+@pytest.mark.parametrize("deterministic", [False, True])
+def test_prediction_uses_explicit_collection_or_evaluation_mode(deterministic: bool):
+    servicer = LearnerServicer(LearnerConfig(state_dim=3, action_dim=3, deterministic_inference=deterministic))
+    called_with: list[bool] = []
+
+    def act_with_actor(_actor, states, *, deterministic: bool):
+        called_with.append(deterministic)
+        return torch.zeros((len(states), 3))
+
+    servicer._agent.act_with_actor = act_with_actor  # type: ignore[method-assign]
+    servicer.PredictBatch(
+        learner_pb2.PredictBatchRequest(states=[environment_pb2.State(values=[0.0, 0.1, 0.2])]),
+        AbortContext(),
+    )
+    assert called_with == [deterministic]
+
+
 def test_training_increments_policy_version():
     servicer = LearnerServicer(LearnerConfig(state_dim=3, action_dim=3))
     transitions = [transition_pb2.Transition(state=environment_pb2.State(values=[0.0, 0.1, 0.2]), action=environment_pb2.Action(values=[0.0, 0.0, 0.0]), reward=1.0, next_state=environment_pb2.State(values=[0.1, 0.2, 0.3])) for _ in range(4)]
     result = servicer.TrainBatch(learner_pb2.TrainBatchRequest(batch=transition_pb2.TransitionBatch(transitions=transitions)), AbortContext())
     assert result.accepted
-    assert result.policy_version == 1
+    assert result.policy_version == 2
     assert result.training_step == 1
+
+
+def test_policy_snapshot_remains_available_after_training():
+    servicer = LearnerServicer(LearnerConfig(state_dim=3, action_dim=3))
+    request = learner_pb2.PredictBatchRequest(states=[environment_pb2.State(values=[0.0, 0.1, 0.2])])
+    initial = servicer.PredictBatch(request, AbortContext())
+    assert initial.policy_version == 1
+    transitions = [transition_pb2.Transition(state=environment_pb2.State(values=[0.0, 0.1, 0.2]), action=environment_pb2.Action(values=[0.0, 0.0, 0.0]), reward=1.0, next_state=environment_pb2.State(values=[0.1, 0.2, 0.3])) for _ in range(4)]
+    trained = servicer.TrainBatch(learner_pb2.TrainBatchRequest(batch=transition_pb2.TransitionBatch(transitions=transitions)), AbortContext())
+    assert trained.policy_version == 2
+    pinned = servicer.PredictBatch(
+        learner_pb2.PredictBatchRequest(states=[environment_pb2.State(values=[0.0, 0.1, 0.2])], policy_version=1),
+        AbortContext(),
+    )
+    assert pinned.policy_version == 1

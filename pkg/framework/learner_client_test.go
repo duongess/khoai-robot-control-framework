@@ -51,12 +51,15 @@ func TestLearnerClientHealthCheck(t *testing.T) {
 func TestLearnerClientPredictBatchMapsStatesAndActions(t *testing.T) {
 	client, service := newTestLearnerClient(t)
 
-	prediction, err := client.PredictBatch(context.Background(), []State{{1, 2}, {3, 4}})
+	prediction, err := client.PredictBatch(context.Background(), []State{{1, 2}, {3, 4}}, 7)
 	if err != nil {
 		t.Fatalf("PredictBatch() error = %v", err)
 	}
 	if len(service.predictRequest.States) != 2 || service.predictRequest.States[0].Values[0] != 1 {
 		t.Fatalf("PredictBatch() request = %#v", service.predictRequest)
+	}
+	if service.predictRequest.PolicyVersion != 7 {
+		t.Fatalf("PredictBatch() requested policy version = %d, want 7", service.predictRequest.PolicyVersion)
 	}
 	if len(prediction.Actions) != 2 || prediction.Actions[0][0] != 0.5 || prediction.Actions[1][0] != 0.5 {
 		t.Fatalf("PredictBatch() actions = %#v", prediction.Actions)

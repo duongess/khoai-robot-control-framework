@@ -42,7 +42,10 @@ class SACConfig:
 
 @dataclass(frozen=True)
 class LearnerConfig:
-    state_dim: int = 19
+    # The force-control task emits 22 values. Keep the dataclass default aligned
+    # with from_environment() so an in-process servicer cannot start with a
+    # different observation schema than the gRPC process.
+    state_dim: int = 22
     action_dim: int = 3
     controller_type: str = "mlp"
     graph_path: str | None = None
@@ -54,13 +57,14 @@ class LearnerConfig:
     max_horizontal_speed: float = 1.0
     max_vertical_speed: float = 1.0
     max_gripper_command: float = 1.0
+    deterministic_inference: bool = False
 
     @classmethod
     def from_environment(cls) -> "LearnerConfig":
         try:
             graph_path = os.environ.get("LEARNER_GRAPH_PATH")
             return cls(
-                state_dim=int(os.environ.get("LEARNER_STATE_DIM", "21")),
+                state_dim=int(os.environ.get("LEARNER_STATE_DIM", "22")),
                 action_dim=int(os.environ.get("LEARNER_ACTION_DIM", "3")),
                 controller_type=os.environ.get("LEARNER_CONTROLLER", "mlp"),
                 graph_path=graph_path,
@@ -72,6 +76,7 @@ class LearnerConfig:
                 max_horizontal_speed=float(os.environ.get("LEARNER_MAX_HORIZONTAL_SPEED", "1.0")),
                 max_vertical_speed=float(os.environ.get("LEARNER_MAX_VERTICAL_SPEED", "1.0")),
                 max_gripper_command=float(os.environ.get("LEARNER_MAX_GRIPPER_COMMAND", "1.0")),
+                deterministic_inference=os.environ.get("LEARNER_DETERMINISTIC_INFERENCE", "false").lower() == "true",
             )
         except ValueError as error:
             raise ValueError("LEARNER_STATE_DIM and LEARNER_ACTION_DIM must be integers") from error
