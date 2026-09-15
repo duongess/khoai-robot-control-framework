@@ -95,7 +95,6 @@ class SACAgent:
 
     @staticmethod
     def _build_actor(config: SACConfig) -> nn.Module:
-        print(config.controller_type)
         if config.controller_type == "mlp":
             return GaussianActor(config.state_dim, config.action_dim, config.hidden_dim)
         graph = ConnectomeGraph.load(config.graph_path or "")

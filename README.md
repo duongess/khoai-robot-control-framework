@@ -53,7 +53,7 @@ LEARNER_CONTROLLER=mlp poetry run python -m ai
 LEARNER_CONTROLLER=fly_connectome \
 LEARNER_GRAPH_PATH=data/connectome/connectome_graph.npz \
 LEARNER_PROPAGATION_STEPS=4 LEARNER_TRAIN_EDGE_GAINS=true \
-LEARNER_ACTION_DEAD_ZONE=0.1 LEARNER_MAX_HORIZONTAL_SPEED=0.2 \
+LEARNER_ACTION_DEAD_ZONE=0.03 LEARNER_MAX_HORIZONTAL_SPEED=0.2 \
 LEARNER_MAX_VERTICAL_SPEED=0.2 poetry run python -m ai
 
 # Same graph size, edge count, in-degree, and out-degree baseline

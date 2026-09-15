@@ -3,6 +3,8 @@
 from dataclasses import dataclass
 import os
 from pathlib import Path
+from dotenv import load_dotenv
+load_dotenv()  # Load environment variables from .env file if present
 
 @dataclass(frozen=True)
 class SACConfig:
@@ -20,7 +22,7 @@ class SACConfig:
     train_edge_gains: bool = True
     freeze_topology: bool = True
     activation: str = "tanh"
-    action_dead_zone: float = 0.1
+    action_dead_zone: float = 0.03
     max_horizontal_speed: float = 1.0
     max_vertical_speed: float = 1.0
     max_gripper_command: float = 1.0
@@ -53,7 +55,7 @@ class LearnerConfig:
     train_edge_gains: bool = True
     freeze_topology: bool = True
     activation: str = "tanh"
-    action_dead_zone: float = 0.1
+    action_dead_zone: float = 0.03
     max_horizontal_speed: float = 1.0
     max_vertical_speed: float = 1.0
     max_gripper_command: float = 1.0
@@ -72,7 +74,7 @@ class LearnerConfig:
                 train_edge_gains=os.environ.get("LEARNER_TRAIN_EDGE_GAINS", "true").lower() == "true",
                 freeze_topology=os.environ.get("LEARNER_FREEZE_TOPOLOGY", "true").lower() == "true",
                 activation=os.environ.get("LEARNER_ACTIVATION", "tanh"),
-                action_dead_zone=float(os.environ.get("LEARNER_ACTION_DEAD_ZONE", "0.1")),
+                action_dead_zone=float(os.environ.get("LEARNER_ACTION_DEAD_ZONE", "0.03")),
                 max_horizontal_speed=float(os.environ.get("LEARNER_MAX_HORIZONTAL_SPEED", "1.0")),
                 max_vertical_speed=float(os.environ.get("LEARNER_MAX_VERTICAL_SPEED", "1.0")),
                 max_gripper_command=float(os.environ.get("LEARNER_MAX_GRIPPER_COMMAND", "1.0")),
