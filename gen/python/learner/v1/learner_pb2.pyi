@@ -71,13 +71,31 @@ class HealthCheckRequest(_message.Message):
     def __init__(self) -> None: ...
 
 class HealthCheckResponse(_message.Message):
-    __slots__ = ("ready", "policy_version", "training_step", "device")
+    __slots__ = ("ready", "policy_version", "training_step", "device", "model_name")
     READY_FIELD_NUMBER: _ClassVar[int]
     POLICY_VERSION_FIELD_NUMBER: _ClassVar[int]
     TRAINING_STEP_FIELD_NUMBER: _ClassVar[int]
     DEVICE_FIELD_NUMBER: _ClassVar[int]
+    MODEL_NAME_FIELD_NUMBER: _ClassVar[int]
     ready: bool
     policy_version: int
     training_step: int
     device: str
-    def __init__(self, ready: _Optional[bool] = ..., policy_version: _Optional[int] = ..., training_step: _Optional[int] = ..., device: _Optional[str] = ...) -> None: ...
+    model_name: str
+    def __init__(self, ready: _Optional[bool] = ..., policy_version: _Optional[int] = ..., training_step: _Optional[int] = ..., device: _Optional[str] = ..., model_name: _Optional[str] = ...) -> None: ...
+
+class SaveCheckpointRequest(_message.Message):
+    __slots__ = ("model_name",)
+    MODEL_NAME_FIELD_NUMBER: _ClassVar[int]
+    model_name: str
+    def __init__(self, model_name: _Optional[str] = ...) -> None: ...
+
+class SaveCheckpointResponse(_message.Message):
+    __slots__ = ("model_name", "policy_version", "training_step")
+    MODEL_NAME_FIELD_NUMBER: _ClassVar[int]
+    POLICY_VERSION_FIELD_NUMBER: _ClassVar[int]
+    TRAINING_STEP_FIELD_NUMBER: _ClassVar[int]
+    model_name: str
+    policy_version: int
+    training_step: int
+    def __init__(self, model_name: _Optional[str] = ..., policy_version: _Optional[int] = ..., training_step: _Optional[int] = ...) -> None: ...

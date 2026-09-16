@@ -6,7 +6,11 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"strings"
 	"time"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 type RuntimeStatus string
@@ -282,6 +286,14 @@ func (r *Runtime) cycle(ctx context.Context, descriptor TaskDescriptor) {
 		r.mu.RUnlock()
 		prediction, err := learner.PredictBatch(ctx, states, requestedVersion)
 		if err != nil {
+			// A snapshot is pinned for one episode, but the learner may evict
+			// old snapshots to bound memory. That invalidates this episode only.
+			if requestedVersion != 0 && isEvictedPolicySnapshot(err) {
+				if resetErr := r.restartWorkersAfterSnapshotEviction(indexes, requestedVersion, descriptor); resetErr != nil {
+					r.fail(resetErr)
+				}
+				return
+			}
 			r.fail(fmt.Errorf("predict actions for policy version %d: %w", requestedVersion, err))
 			return
 		}
@@ -389,6 +401,58 @@ func (r *Runtime) cycle(ctx context.Context, descriptor TaskDescriptor) {
 	}
 }
 
+// isEvictedPolicySnapshot identifies the one prediction failure that can be
+// recovered by beginning a fresh episode. Other FailedPrecondition responses
+// may indicate a configuration error, so they remain fatal.
+func isEvictedPolicySnapshot(err error) bool {
+	if status.Code(err) != codes.FailedPrecondition {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "policy snapshot") && strings.Contains(message, "unavailable")
+}
+
+// restartWorkersAfterSnapshotEviction discards episodes whose pinned actor
+// snapshot was evicted. It intentionally adds no terminal transition to the
+// replay buffer: the environment did not produce a valid action for that
+// state. The next cycle asks the learner for a current immutable snapshot.
+func (r *Runtime) restartWorkersAfterSnapshotEviction(indexes []int, evictedVersion uint64, descriptor TaskDescriptor) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.status != RuntimeRunning {
+		return nil
+	}
+	for _, index := range indexes {
+		if index < 0 || index >= len(r.workers) {
+			return fmt.Errorf("restart worker index %d after evicted policy snapshot: out of range", index)
+		}
+		worker := r.workers[index]
+		// A concurrent control path may already have reset this worker. Do not
+		// discard a newer episode in that case.
+		if worker.episodePolicyVersion != evictedVersion {
+			continue
+		}
+		state, err := worker.task.Reset()
+		if err != nil {
+			return fmt.Errorf("restart worker %d after evicted policy snapshot %d: %w", worker.id, evictedVersion, err)
+		}
+		if len(state) != descriptor.StateDimension {
+			return fmt.Errorf("restart worker %d after evicted policy snapshot %d returned state dimension %d, want %d", worker.id, evictedVersion, len(state), descriptor.StateDimension)
+		}
+		worker.state = append(State(nil), state...)
+		worker.episodeID++
+		worker.episodeStep = 0
+		worker.lastAction = nil
+		worker.lastReward = 0
+		worker.episodeReward = 0
+		worker.episodePolicyVersion = 0
+		worker.lastInfo = map[string]float32{"policy_snapshot_restarted": 1}
+		worker.outcome = OutcomeRunning
+		worker.actionSource = "snapshot_recovery"
+	}
+	return nil
+}
+
 func randomAction(seed int64, dimension int, minimum, maximum float32) Action {
 	random := rand.New(rand.NewSource(seed))
 	action := make(Action, dimension)
@@ -484,6 +548,25 @@ func (r *Runtime) Reset() error {
 		worker.state, worker.episodeID, worker.episodeStep, worker.episodeReward, worker.lastInfo, worker.outcome, worker.actionSource = append(State(nil), state...), worker.episodeID+1, 0, 0, nil, OutcomeRunning, "pending"
 	}
 	return nil
+}
+
+// SaveCheckpoint asks the configured learner to durably save its complete
+// training state. It does not reset active episodes or the Go replay buffer.
+func (r *Runtime) SaveCheckpoint(ctx context.Context, modelName string) (CheckpointResult, error) {
+	if r == nil {
+		return CheckpointResult{}, errors.New("runtime is nil")
+	}
+	if ctx == nil {
+		return CheckpointResult{}, errors.New("context is required")
+	}
+	r.mu.Lock()
+	learner := r.learner
+	r.mu.Unlock()
+	checkpointing, ok := learner.(CheckpointingLearner)
+	if !ok {
+		return CheckpointResult{}, errors.New("configured learner does not support model checkpoints")
+	}
+	return checkpointing.SaveCheckpoint(ctx, modelName)
 }
 
 // ApproveCurriculumReview advances one reviewable worker to its next

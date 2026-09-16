@@ -1,9 +1,11 @@
 import math
+from pathlib import Path
 
 import pytest
 import torch
 
 from ai.config import LearnerConfig
+from ai.checkpoints import validate_model_name
 from ai.grpc_server import LearnerServicer
 from learner.v1 import environment_pb2, learner_pb2, transition_pb2
 
@@ -20,6 +22,11 @@ def test_health_and_batched_prediction_use_configured_dimensions():
     assert all(len(action.values) == 3 for action in response.actions)
     assert all(-1 <= value <= 1 for action in response.actions for value in action.values)
     assert servicer.HealthCheck(learner_pb2.HealthCheckRequest(), AbortContext()).ready
+
+
+def test_learner_forwards_configured_long_horizon_discount():
+    servicer = LearnerServicer(LearnerConfig(state_dim=3, action_dim=3, gamma=0.998))
+    assert servicer._agent.config.gamma == pytest.approx(0.998)
 
 
 def test_prediction_rejects_invalid_and_non_finite_states():
@@ -80,3 +87,33 @@ def test_policy_snapshot_cache_is_bounded():
     servicer.TrainBatch(request, AbortContext())
     assert len(servicer._actor_snapshots) == 2
     assert set(servicer._actor_snapshots) == {3, 4}
+
+
+def test_checkpoint_round_trip_restores_complete_sac_training_state(tmp_path: Path):
+    config = LearnerConfig(state_dim=3, action_dim=3, checkpoint_dir=str(tmp_path))
+    servicer = LearnerServicer(config)
+    transitions = [transition_pb2.Transition(
+        state=environment_pb2.State(values=[0.0, 0.1, 0.2]),
+        action=environment_pb2.Action(values=[0.0, 0.0, 0.0]),
+        reward=1.0,
+        next_state=environment_pb2.State(values=[0.1, 0.2, 0.3]),
+    ) for _ in range(4)]
+    servicer.TrainBatch(learner_pb2.TrainBatchRequest(batch=transition_pb2.TransitionBatch(transitions=transitions)), AbortContext())
+    saved_actor = {name: value.detach().clone() for name, value in servicer._agent.actor.state_dict().items()}
+
+    saved = servicer.SaveCheckpoint(learner_pb2.SaveCheckpointRequest(model_name="grasp-v1"), AbortContext())
+    restored = LearnerServicer(config, model_name="grasp-v1")
+
+    assert saved.model_name == "grasp-v1"
+    assert (tmp_path / "grasp-v1.pt").is_file()
+    assert restored._policy_version == servicer._policy_version
+    assert restored._training_step == servicer._training_step
+    assert restored._samples_seen == servicer._samples_seen
+    assert all(torch.equal(value, restored._agent.actor.state_dict()[name]) for name, value in saved_actor.items())
+    assert restored._agent.alpha.item() == pytest.approx(servicer._agent.alpha.item())
+
+
+@pytest.mark.parametrize("name", ["../escape", "", "has space", "/tmp/model"])
+def test_checkpoint_model_name_rejects_paths_and_unsafe_names(name: str):
+    with pytest.raises(ValueError):
+        validate_model_name(name)

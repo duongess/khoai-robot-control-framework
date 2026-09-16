@@ -1,7 +1,8 @@
 """A minimal Soft Actor-Critic implementation for one-dimensional actions."""
 
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+from typing import Any
 
 import torch
 from torch import nn
@@ -102,6 +103,53 @@ class SACAgent:
     @property
     def alpha(self) -> torch.Tensor:
         return self.log_alpha.exp()
+
+    def checkpoint_state(self) -> dict[str, Any]:
+        """Return every trainable SAC component needed for an exact resume."""
+        return {
+            "sac_config": asdict(self.config),
+            "actor": self.actor.state_dict(),
+            "critic_one": self.critic_one.state_dict(),
+            "critic_two": self.critic_two.state_dict(),
+            "target_critic_one": self.target_critic_one.state_dict(),
+            "target_critic_two": self.target_critic_two.state_dict(),
+            "actor_optimizer": self.actor_optimizer.state_dict(),
+            "critic_one_optimizer": self.critic_one_optimizer.state_dict(),
+            "critic_two_optimizer": self.critic_two_optimizer.state_dict(),
+            "alpha_optimizer": self.alpha_optimizer.state_dict(),
+            "log_alpha": self.log_alpha.detach().cpu().clone(),
+            "torch_rng_state": torch.get_rng_state(),
+        }
+
+    def load_checkpoint_state(self, state: dict[str, Any]) -> None:
+        """Restore a checkpoint created by :meth:`checkpoint_state` safely."""
+        expected_config = asdict(self.config)
+        if state.get("sac_config") != expected_config:
+            raise ValueError("checkpoint SAC configuration does not match the selected model")
+        required = (
+            "actor", "critic_one", "critic_two", "target_critic_one", "target_critic_two",
+            "actor_optimizer", "critic_one_optimizer", "critic_two_optimizer", "alpha_optimizer",
+            "log_alpha", "torch_rng_state",
+        )
+        if any(key not in state for key in required):
+            raise ValueError("checkpoint SAC state is incomplete")
+        log_alpha = state["log_alpha"]
+        if not isinstance(log_alpha, torch.Tensor) or log_alpha.shape != self.log_alpha.shape or not torch.isfinite(log_alpha).all():
+            raise ValueError("checkpoint contains an invalid entropy temperature")
+        try:
+            self.actor.load_state_dict(state["actor"])
+            self.critic_one.load_state_dict(state["critic_one"])
+            self.critic_two.load_state_dict(state["critic_two"])
+            self.target_critic_one.load_state_dict(state["target_critic_one"])
+            self.target_critic_two.load_state_dict(state["target_critic_two"])
+            self.actor_optimizer.load_state_dict(state["actor_optimizer"])
+            self.critic_one_optimizer.load_state_dict(state["critic_one_optimizer"])
+            self.critic_two_optimizer.load_state_dict(state["critic_two_optimizer"])
+            self.alpha_optimizer.load_state_dict(state["alpha_optimizer"])
+            self.log_alpha.data.copy_(log_alpha.to(self.device))
+            torch.set_rng_state(state["torch_rng_state"])
+        except (KeyError, RuntimeError, TypeError, ValueError) as error:
+            raise ValueError(f"could not restore SAC checkpoint state: {error}") from error
 
     @staticmethod
     def _build_actor(config: SACConfig) -> nn.Module:

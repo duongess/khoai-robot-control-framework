@@ -69,11 +69,44 @@ capacity:
 ```bash
 LEARNER_TORCH_NUM_THREADS=1 \
 LEARNER_TORCH_NUM_INTEROP_THREADS=1 \
+LEARNER_GAMMA=0.999 \
 LEARNER_MAX_POLICY_SNAPSHOTS=128 \
 poetry run python -m ai
 ```
 
+The force-control environment advances at 0.1 seconds per physics step and
+uses a 30-second secure-hold curriculum criterion. `LEARNER_GAMMA=0.999`
+keeps delayed object-break consequences meaningful across that interval;
+`0.99` has an effective horizon of roughly ten seconds at this control rate.
+
 Training remains driven by the existing Go runtime, which sends replay batches to the same gRPC service. Deterministic inference uses the existing `PredictBatch` RPC. There is no standalone robot inference binary in this repository.
+
+## Save and resume a local model
+
+The dashboard's **Save Model** control writes an atomic local checkpoint. It
+contains the SAC actor, both critics and target critics, all four optimizer
+states, entropy temperature, RNG state, and learner/policy counters. Saving
+does not pause the simulation and overwrites only the named model's previous
+checkpoint after the new file is complete.
+
+```bash
+# Start a brand-new, unnamed learner. Give it a name in the dashboard before
+# its first Save Model action.
+poetry run python -m ai
+
+# If data/models/grasp-v1.pt exists, restore and continue it. Otherwise start
+# a brand-new learner named grasp-v1; Save Model will create/overwrite it.
+poetry run python -m ai grasp-v1
+```
+
+Names may contain letters, digits, `.`, `_`, and `-` only; they are never file
+paths. Checkpoints default to the ignored `data/models/` directory, or set
+`LEARNER_CHECKPOINT_DIR` to choose another local directory. Load only
+checkpoints you created or trust. To resume a saved run, start the learner with
+its name first, then start the Go simulator so every worker begins a fresh
+episode on the restored policy. The Go replay buffer is deliberately not
+checkpointed: it belongs to the short-lived simulator runtime and old
+transitions can be incompatible after an environment or reward change.
 
 The observation mapping is exact but intentionally generic: the task's ordered `State` vector of dimension `LEARNER_STATE_DIM` passes through a trainable `Linear -> tanh -> Linear` sensory encoder, whose outputs are injected only into explicit `input_groups.sensory` body IDs in the cached artifact. This repository has no named arm observation schema, so it cannot truthfully label state index 0 as target position or a joint angle; a downstream task must document its vector ordering.
 

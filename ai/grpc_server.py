@@ -7,6 +7,7 @@ import sys
 import threading
 from concurrent import futures
 from copy import deepcopy
+from dataclasses import asdict, replace
 from pathlib import Path
 
 import grpc
@@ -17,6 +18,13 @@ import torch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "gen" / "python"))
 
 from ai.config import LearnerConfig, SACConfig
+from ai.checkpoints import (
+    CHECKPOINT_FORMAT_VERSION,
+    atomic_save_checkpoint,
+    checkpoint_path,
+    load_checkpoint,
+    validate_model_name,
+)
 from ai.sac import SACAgent, TensorBatch
 from gen.python.learner.v1 import environment_pb2, learner_pb2, learner_pb2_grpc
 
@@ -50,11 +58,27 @@ LOGGER = configure_logging()
 class LearnerServicer(learner_pb2_grpc.LearnerServiceServicer):
     """A local SAC learner that trains only on supplied transition batches."""
 
-    def __init__(self, config: LearnerConfig | None = None) -> None:
-        self._config = config or LearnerConfig.from_environment()
+    def __init__(self, config: LearnerConfig | None = None, model_name: str | None = None) -> None:
+        requested_config = config or LearnerConfig.from_environment()
+        self._model_name = validate_model_name(model_name) if model_name else ""
+        checkpoint = checkpoint_path(requested_config.checkpoint_dir, self._model_name) if self._model_name else None
+        payload = load_checkpoint(checkpoint) if checkpoint and checkpoint.is_file() else None
+        if payload is None:
+            self._config = requested_config
+        else:
+            try:
+                # Loading by name must work without making a user remember all
+                # controller/graph environment variables from the original run.
+                saved_config = LearnerConfig(**payload["learner_config"])
+            except (TypeError, ValueError) as error:
+                raise ValueError(f"checkpoint {checkpoint.name} has an invalid learner configuration: {error}") from error
+            # The caller may deliberately move their local checkpoint directory;
+            # retain that location while restoring every training setting.
+            self._config = replace(saved_config, checkpoint_dir=requested_config.checkpoint_dir)
         self._agent = SACAgent(SACConfig(
             state_dim=self._config.state_dim,
             action_dim=self._config.action_dim,
+            gamma=self._config.gamma,
             target_entropy=-float(self._config.action_dim),
             controller_type=self._config.controller_type,
             graph_path=self._config.graph_path,
@@ -81,6 +105,8 @@ class LearnerServicer(learner_pb2_grpc.LearnerServiceServicer):
         self._training_step = 0
         self._predict_requests = 0
         self._train_requests = 0
+        if payload is not None:
+            self._restore_checkpoint(payload, checkpoint)
 
     def PredictBatch(self, request, context):
         try:
@@ -141,10 +167,12 @@ class LearnerServicer(learner_pb2_grpc.LearnerServiceServicer):
                     self._actor_snapshots[self._policy_version] = snapshot
                     while len(self._actor_snapshots) > self._config.max_policy_snapshots:
                         del self._actor_snapshots[min(self._actor_snapshots)]
+                # Keep counters in the same critical section as weights and
+                # policy publication so a concurrent checkpoint is coherent.
+                self._samples_seen += len(request.batch.transitions)
+                self._training_step += 1
         except ValueError as error:
             context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(error))
-        self._samples_seen += len(request.batch.transitions)
-        self._training_step += 1
         self._train_requests += 1
         if self._train_requests % self._config.log_every_n_requests == 0:
             LOGGER.info("train_batch", extra={"fields": {"received": len(request.batch.transitions), "samples_seen": self._samples_seen, **metrics}})
@@ -166,7 +194,70 @@ class LearnerServicer(learner_pb2_grpc.LearnerServiceServicer):
         )
 
     def HealthCheck(self, request, context):
-        return learner_pb2.HealthCheckResponse(ready=True, policy_version=self._policy_version, training_step=self._training_step, device=str(self._agent.device))
+        return learner_pb2.HealthCheckResponse(
+            ready=True,
+            policy_version=self._policy_version,
+            training_step=self._training_step,
+            device=str(self._agent.device),
+            model_name=self._model_name,
+        )
+
+    def SaveCheckpoint(self, request, context):
+        try:
+            requested_name = request.model_name.strip() or self._model_name
+            model_name = validate_model_name(requested_name)
+            path = checkpoint_path(self._config.checkpoint_dir, model_name)
+            # Follow the same lock ordering as TrainBatch. This creates a
+            # consistent state across networks, optimizers and policy version.
+            with self._training_lock:
+                with self._policy_lock:
+                    payload = {
+                        "format_version": CHECKPOINT_FORMAT_VERSION,
+                        "model_name": model_name,
+                        "learner_config": asdict(self._config),
+                        "agent": self._agent.checkpoint_state(),
+                        "samples_seen": self._samples_seen,
+                        "policy_version": self._policy_version,
+                        "training_step": self._training_step,
+                    }
+                    atomic_save_checkpoint(path, payload)
+                    self._model_name = model_name
+        except ValueError as error:
+            context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(error))
+        LOGGER.info("checkpoint_saved", extra={"fields": {
+            "model_name": model_name,
+            "policy_version": self._policy_version,
+            "training_step": self._training_step,
+        }})
+        return learner_pb2.SaveCheckpointResponse(
+            model_name=model_name,
+            policy_version=self._policy_version,
+            training_step=self._training_step,
+        )
+
+    def _restore_checkpoint(self, payload: dict, checkpoint: Path) -> None:
+        try:
+            self._agent.load_checkpoint_state(payload["agent"])
+            self._samples_seen = self._checkpoint_counter(payload, "samples_seen")
+            self._policy_version = self._checkpoint_counter(payload, "policy_version", minimum=1)
+            self._training_step = self._checkpoint_counter(payload, "training_step")
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError(f"could not restore checkpoint {checkpoint.name}: {error}") from error
+        # Episode snapshots intentionally do not survive a process restart.
+        # New Go episodes ask for this restored latest version first.
+        self._actor_snapshots = {self._policy_version: deepcopy(self._agent.actor).eval()}
+        LOGGER.info("checkpoint_loaded", extra={"fields": {
+            "model_name": self._model_name,
+            "policy_version": self._policy_version,
+            "training_step": self._training_step,
+        }})
+
+    @staticmethod
+    def _checkpoint_counter(payload: dict, key: str, minimum: int = 0) -> int:
+        value = payload.get(key)
+        if not isinstance(value, int) or value < minimum:
+            raise ValueError(f"checkpoint {key} is invalid")
+        return value
 
     def _states_to_tensor(self, states, field_name: str) -> torch.Tensor:
         values = [list(state.values) for state in states]
@@ -201,22 +292,22 @@ class LearnerServicer(learner_pb2_grpc.LearnerServiceServicer):
         return batch
 
 
-def create_server(config: LearnerConfig | None = None) -> grpc.Server:
+def create_server(config: LearnerConfig | None = None, model_name: str | None = None) -> grpc.Server:
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=2))
-    learner_pb2_grpc.add_LearnerServiceServicer_to_server(LearnerServicer(config), server)
+    learner_pb2_grpc.add_LearnerServiceServicer_to_server(LearnerServicer(config, model_name), server)
     if server.add_insecure_port(ADDRESS) == 0:
         raise RuntimeError(f"could not bind learner server to {ADDRESS}")
     return server
 
 
-def serve() -> None:
+def serve(model_name: str | None = None) -> None:
     config = LearnerConfig.from_environment()
     # Set these before any gRPC work is accepted. Limiting threads prevents a
     # small CPU actor/critic update from spawning enough native workers to make
     # the browser and desktop unresponsive.
     torch.set_num_threads(config.torch_num_threads)
     torch.set_num_interop_threads(config.torch_num_interop_threads)
-    server = create_server(config)
+    server = create_server(config, model_name)
     server.start()
     LOGGER.info("server_started", extra={"fields": {"address": ADDRESS}})
 

@@ -5,6 +5,9 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 type runtimeTestTask struct{ state State }
@@ -58,11 +61,61 @@ func (l *runtimeTestLearner) TrainBatch(_ context.Context, transitions []Transit
 }
 func (l *runtimeTestLearner) Close() error { return nil }
 
+type snapshotEvictionLearner struct {
+	mu                sync.Mutex
+	requestedVersions []uint64
+	evicted           bool
+}
+
+func (l *snapshotEvictionLearner) HealthCheck(context.Context) (HealthStatus, error) {
+	return HealthStatus{Ready: true}, nil
+}
+
+func (l *snapshotEvictionLearner) PredictBatch(_ context.Context, states []State, requestedVersion uint64) (PredictionResult, error) {
+	l.mu.Lock()
+	l.requestedVersions = append(l.requestedVersions, requestedVersion)
+	if requestedVersion == 1 && !l.evicted {
+		l.evicted = true
+		l.mu.Unlock()
+		return PredictionResult{}, status.Error(codes.FailedPrecondition, "policy snapshot 1 is unavailable; start a fresh episode")
+	}
+	version := requestedVersion
+	if version == 0 {
+		if l.evicted {
+			version = 2
+		} else {
+			version = 1
+		}
+	}
+	l.mu.Unlock()
+	actions := make([]Action, len(states))
+	for index := range actions {
+		actions[index] = Action{0.1}
+	}
+	return PredictionResult{Actions: actions, PolicyVersion: version}, nil
+}
+
+func (l *snapshotEvictionLearner) TrainBatch(context.Context, []Transition) (TrainingResult, error) {
+	return TrainingResult{Accepted: true}, nil
+}
+
+func (l *snapshotEvictionLearner) Close() error { return nil }
+
 type blockingTrainingLearner struct {
 	runtimeTestLearner
 	started chan struct{}
 	release chan struct{}
 	once    sync.Once
+}
+
+type checkpointRuntimeLearner struct {
+	runtimeTestLearner
+	savedName string
+}
+
+func (l *checkpointRuntimeLearner) SaveCheckpoint(_ context.Context, modelName string) (CheckpointResult, error) {
+	l.savedName = modelName
+	return CheckpointResult{ModelName: modelName, PolicyVersion: 4, TrainingStep: 9}, nil
 }
 
 func (l *blockingTrainingLearner) TrainBatch(_ context.Context, _ []Transition) (TrainingResult, error) {
@@ -99,6 +152,20 @@ func TestReplayBufferOverwritesAndSamplesCopies(t *testing.T) {
 		if transition.Observation[0] == 99 {
 			t.Fatal("sample mutation changed buffered transition")
 		}
+	}
+}
+
+func TestRuntimeDelegatesCheckpointWithoutResettingWorkers(t *testing.T) {
+	learner := &checkpointRuntimeLearner{}
+	runtime := NewRuntime()
+	runtime.learner = learner
+
+	result, err := runtime.SaveCheckpoint(context.Background(), "grasp-v1")
+	if err != nil {
+		t.Fatalf("SaveCheckpoint() error = %v", err)
+	}
+	if learner.savedName != "grasp-v1" || result.PolicyVersion != 4 || result.TrainingStep != 9 {
+		t.Fatalf("SaveCheckpoint() result=%#v learner=%#v", result, learner)
 	}
 }
 
@@ -152,6 +219,45 @@ func TestRuntimeBatchesWorkersAndSupportsPauseResume(t *testing.T) {
 		if version != 1 {
 			t.Fatalf("episode changed policy snapshot: requests=%v", learner.requestedVersions)
 		}
+	}
+}
+
+func TestRuntimeRestartsOnlyEvictedPolicySnapshotEpisode(t *testing.T) {
+	learner := &snapshotEvictionLearner{}
+	runtime := NewRuntime()
+	if err := runtime.RegisterTask(TaskRegistration{Descriptor: TaskDescriptor{Name: "snapshot-recovery", StateDimension: 2, ActionDimension: 1, ActionMin: -1, ActionMax: 1}, Factory: runtimeTestFactory{}}); err != nil {
+		t.Fatal(err)
+	}
+	config := DefaultRuntimeConfig()
+	config.WorkerCount, config.TickInterval, config.RandomActionWarmupTransitions, config.WarmupTransitions = 1, time.Millisecond, 0, 1000
+	if err := runtime.Configure(config, learner); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := runtime.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Stop()
+
+	deadline := time.Now().Add(time.Second)
+	for {
+		snapshot := runtime.Snapshot()
+		if snapshot.Status == RuntimeError {
+			t.Fatalf("snapshot eviction stopped the runtime: %#v", snapshot)
+		}
+		if snapshot.Workers[0].EpisodeID >= 2 && snapshot.Workers[0].PolicyVersion == 2 && snapshot.TotalSteps >= 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("runtime did not recover from an evicted snapshot: %#v", snapshot)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	learner.mu.Lock()
+	defer learner.mu.Unlock()
+	if len(learner.requestedVersions) < 3 || learner.requestedVersions[0] != 0 || learner.requestedVersions[1] != 1 || learner.requestedVersions[2] != 0 {
+		t.Fatalf("policy requests = %v, want latest, evicted snapshot, then latest", learner.requestedVersions)
 	}
 }
 

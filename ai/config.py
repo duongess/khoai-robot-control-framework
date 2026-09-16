@@ -11,7 +11,10 @@ class SACConfig:
     state_dim: int
     action_dim: int = 3
     hidden_dim: int = 128
-    gamma: float = 0.99
+    # The force-control task uses a 0.1 s physics step and contains a 30 s
+    # secure-hold lesson. A 0.99 per-step discount has only a ~10 s effective
+    # horizon, making a later break penalty almost invisible to SAC.
+    gamma: float = 0.999
     tau: float = 0.005
     learning_rate: float = 3e-4
     target_entropy: float = -3.0
@@ -35,6 +38,8 @@ class SACConfig:
             raise ValueError("state dimension must be positive")
         if self.action_dim <= 0:
             raise ValueError("action dimension must be positive")
+        if not 0 < self.gamma < 1:
+            raise ValueError("gamma must be in (0, 1)")
         if self.controller_type not in {"mlp", "fly_connectome", "random_graph"}:
             raise ValueError("controller_type must be mlp, fly_connectome, or random_graph")
         if self.controller_type != "mlp" and not self.graph_path:
@@ -65,6 +70,9 @@ class LearnerConfig:
     max_horizontal_speed: float = 1.0
     max_vertical_speed: float = 1.0
     max_gripper_command: float = 1.0
+    # At the fixed 0.1 s control period, 0.999 keeps meaningful credit for a
+    # 30 s secure hold and its possible later safety failure.
+    gamma: float = 0.999
     deterministic_inference: bool = False
     # Keep the local learner responsive on development machines. These values
     # control PyTorch compute threads, not the number of simulated workers.
@@ -76,16 +84,23 @@ class LearnerConfig:
     # Per-request inference/training logs are expensive at a 20 Hz control
     # rate, especially when the terminal is rendering a browser dashboard.
     log_every_n_requests: int = 100
+    # Checkpoints are local training artifacts. The model name supplied on the
+    # command line is validated separately and is never treated as a path.
+    checkpoint_dir: str = "data/models"
 
     def __post_init__(self) -> None:
         if self.state_dim <= 0 or self.action_dim <= 0:
             raise ValueError("state_dim and action_dim must be positive")
+        if not 0 < self.gamma < 1:
+            raise ValueError("gamma must be in (0, 1)")
         if self.torch_num_threads <= 0 or self.torch_num_interop_threads <= 0:
             raise ValueError("PyTorch thread counts must be positive")
         if self.max_policy_snapshots < 2:
             raise ValueError("max_policy_snapshots must be at least 2")
         if self.log_every_n_requests <= 0:
             raise ValueError("log_every_n_requests must be positive")
+        if not self.checkpoint_dir.strip():
+            raise ValueError("checkpoint_dir must not be empty")
 
     @classmethod
     def from_environment(cls) -> "LearnerConfig":
@@ -105,11 +120,13 @@ class LearnerConfig:
                 max_horizontal_speed=float(os.environ.get("LEARNER_MAX_HORIZONTAL_SPEED", "1.0")),
                 max_vertical_speed=float(os.environ.get("LEARNER_MAX_VERTICAL_SPEED", "1.0")),
                 max_gripper_command=float(os.environ.get("LEARNER_MAX_GRIPPER_COMMAND", "1.0")),
+                gamma=float(os.environ.get("LEARNER_GAMMA", "0.999")),
                 deterministic_inference=os.environ.get("LEARNER_DETERMINISTIC_INFERENCE", "false").lower() == "true",
                 torch_num_threads=int(os.environ.get("LEARNER_TORCH_NUM_THREADS", "1")),
                 torch_num_interop_threads=int(os.environ.get("LEARNER_TORCH_NUM_INTEROP_THREADS", "1")),
                 max_policy_snapshots=int(os.environ.get("LEARNER_MAX_POLICY_SNAPSHOTS", "128")),
                 log_every_n_requests=int(os.environ.get("LEARNER_LOG_EVERY_N_REQUESTS", "100")),
+                checkpoint_dir=os.environ.get("LEARNER_CHECKPOINT_DIR", "data/models"),
             )
         except ValueError as error:
             raise ValueError("learner environment configuration contains an invalid numeric value") from error

@@ -25,6 +25,12 @@ type Learner interface {
 	Close() error
 }
 
+// CheckpointingLearner is intentionally optional so existing task learners
+// remain source-compatible. The local gRPC SAC learner implements it.
+type CheckpointingLearner interface {
+	SaveCheckpoint(context.Context, string) (CheckpointResult, error)
+}
+
 type HealthStatus struct {
 	Ready         bool
 	PolicyVersion uint64
@@ -52,6 +58,13 @@ type TrainingResult struct {
 	ActorLogStdGripper    float32
 	PolicyVersion         uint64
 	TrainingStep          uint64
+}
+
+// CheckpointResult identifies one durable, complete learner save.
+type CheckpointResult struct {
+	ModelName     string
+	PolicyVersion uint64
+	TrainingStep  uint64
 }
 
 // LearnerClient is the gRPC adapter. Generated protobuf types stay private to it.
@@ -159,6 +172,24 @@ func (c *LearnerClient) TrainBatch(ctx context.Context, transitions []Transition
 		return TrainingResult{}, err
 	}
 	return TrainingResult{Accepted: response.GetAccepted(), SamplesSeen: response.GetSamplesSeen(), ActorLoss: response.GetActorLoss(), CriticLoss: response.GetCriticLoss(), AlphaLoss: response.GetAlphaLoss(), Entropy: response.GetEntropy(), CriticOneQ: response.GetCriticOneQ(), CriticTwoQ: response.GetCriticTwoQ(), Alpha: response.GetAlpha(), ActorLogStdHorizontal: response.GetActorLogStdHorizontal(), ActorLogStdVertical: response.GetActorLogStdVertical(), ActorLogStdGripper: response.GetActorLogStdGripper(), PolicyVersion: response.GetPolicyVersion(), TrainingStep: response.GetTrainingStep()}, nil
+}
+
+// SaveCheckpoint persists the complete SAC state under modelName. An empty
+// name means "overwrite the learner's active named model".
+func (c *LearnerClient) SaveCheckpoint(ctx context.Context, modelName string) (CheckpointResult, error) {
+	callContext, cancel, err := c.requestContext(ctx)
+	if err != nil {
+		return CheckpointResult{}, err
+	}
+	defer cancel()
+	response, err := c.client.SaveCheckpoint(callContext, &learnerv1.SaveCheckpointRequest{ModelName: modelName})
+	if err != nil {
+		return CheckpointResult{}, fmt.Errorf("save checkpoint: %w", err)
+	}
+	if response.GetModelName() == "" {
+		return CheckpointResult{}, errors.New("save checkpoint returned an empty model name")
+	}
+	return CheckpointResult{ModelName: response.GetModelName(), PolicyVersion: response.GetPolicyVersion(), TrainingStep: response.GetTrainingStep()}, nil
 }
 
 func (c *LearnerClient) Close() error {

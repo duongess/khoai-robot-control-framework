@@ -47,10 +47,27 @@ message HealthCheckResponse {
   uint64 policy_version = 2;
   uint64 training_step = 3;
   string device = 4;
+  // Empty when this process is a new, unsaved learner.
+  string model_name = 5;
+}
+
+// SaveCheckpoint persists the complete SAC training state. `model_name` may
+// be omitted only after a learner was started with `python -m ai <name>`; in
+// that case the active name is overwritten. Model names are identifiers, not
+// file paths, so a local dashboard cannot write outside the checkpoint root.
+message SaveCheckpointRequest {
+  string model_name = 1;
+}
+
+message SaveCheckpointResponse {
+  string model_name = 1;
+  uint64 policy_version = 2;
+  uint64 training_step = 3;
 }
 
 service LearnerService {
   rpc PredictBatch(PredictBatchRequest) returns (PredictBatchResponse);
   rpc TrainBatch(TrainBatchRequest) returns (TrainBatchResponse);
   rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
+  rpc SaveCheckpoint(SaveCheckpointRequest) returns (SaveCheckpointResponse);
 }

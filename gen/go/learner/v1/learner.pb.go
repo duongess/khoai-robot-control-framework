@@ -375,6 +375,8 @@ type HealthCheckResponse struct {
 	PolicyVersion uint64                 `protobuf:"varint,2,opt,name=policy_version,json=policyVersion,proto3" json:"policy_version,omitempty"`
 	TrainingStep  uint64                 `protobuf:"varint,3,opt,name=training_step,json=trainingStep,proto3" json:"training_step,omitempty"`
 	Device        string                 `protobuf:"bytes,4,opt,name=device,proto3" json:"device,omitempty"`
+	// Empty when this process is a new, unsaved learner.
+	ModelName     string `protobuf:"bytes,5,opt,name=model_name,json=modelName,proto3" json:"model_name,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -437,6 +439,121 @@ func (x *HealthCheckResponse) GetDevice() string {
 	return ""
 }
 
+func (x *HealthCheckResponse) GetModelName() string {
+	if x != nil {
+		return x.ModelName
+	}
+	return ""
+}
+
+// SaveCheckpoint persists the complete SAC training state. `model_name` may
+// be omitted only after a learner was started with `python -m ai <name>`; in
+// that case the active name is overwritten. Model names are identifiers, not
+// file paths, so a local dashboard cannot write outside the checkpoint root.
+type SaveCheckpointRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ModelName     string                 `protobuf:"bytes,1,opt,name=model_name,json=modelName,proto3" json:"model_name,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SaveCheckpointRequest) Reset() {
+	*x = SaveCheckpointRequest{}
+	mi := &file_learner_v1_learner_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SaveCheckpointRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SaveCheckpointRequest) ProtoMessage() {}
+
+func (x *SaveCheckpointRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_learner_v1_learner_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SaveCheckpointRequest.ProtoReflect.Descriptor instead.
+func (*SaveCheckpointRequest) Descriptor() ([]byte, []int) {
+	return file_learner_v1_learner_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *SaveCheckpointRequest) GetModelName() string {
+	if x != nil {
+		return x.ModelName
+	}
+	return ""
+}
+
+type SaveCheckpointResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ModelName     string                 `protobuf:"bytes,1,opt,name=model_name,json=modelName,proto3" json:"model_name,omitempty"`
+	PolicyVersion uint64                 `protobuf:"varint,2,opt,name=policy_version,json=policyVersion,proto3" json:"policy_version,omitempty"`
+	TrainingStep  uint64                 `protobuf:"varint,3,opt,name=training_step,json=trainingStep,proto3" json:"training_step,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SaveCheckpointResponse) Reset() {
+	*x = SaveCheckpointResponse{}
+	mi := &file_learner_v1_learner_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SaveCheckpointResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SaveCheckpointResponse) ProtoMessage() {}
+
+func (x *SaveCheckpointResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_learner_v1_learner_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SaveCheckpointResponse.ProtoReflect.Descriptor instead.
+func (*SaveCheckpointResponse) Descriptor() ([]byte, []int) {
+	return file_learner_v1_learner_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *SaveCheckpointResponse) GetModelName() string {
+	if x != nil {
+		return x.ModelName
+	}
+	return ""
+}
+
+func (x *SaveCheckpointResponse) GetPolicyVersion() uint64 {
+	if x != nil {
+		return x.PolicyVersion
+	}
+	return 0
+}
+
+func (x *SaveCheckpointResponse) GetTrainingStep() uint64 {
+	if x != nil {
+		return x.TrainingStep
+	}
+	return 0
+}
+
 var File_learner_v1_learner_proto protoreflect.FileDescriptor
 
 const file_learner_v1_learner_proto_rawDesc = "" +
@@ -474,17 +591,28 @@ const file_learner_v1_learner_proto_rawDesc = "" +
 	"\x18actor_log_std_horizontal\x18\f \x01(\x02R\x15actorLogStdHorizontal\x123\n" +
 	"\x16actor_log_std_vertical\x18\r \x01(\x02R\x13actorLogStdVertical\x121\n" +
 	"\x15actor_log_std_gripper\x18\x0e \x01(\x02R\x12actorLogStdGripper\"\x14\n" +
-	"\x12HealthCheckRequest\"\x8f\x01\n" +
+	"\x12HealthCheckRequest\"\xae\x01\n" +
 	"\x13HealthCheckResponse\x12\x14\n" +
 	"\x05ready\x18\x01 \x01(\bR\x05ready\x12%\n" +
 	"\x0epolicy_version\x18\x02 \x01(\x04R\rpolicyVersion\x12#\n" +
 	"\rtraining_step\x18\x03 \x01(\x04R\ftrainingStep\x12\x16\n" +
-	"\x06device\x18\x04 \x01(\tR\x06device2\x80\x02\n" +
+	"\x06device\x18\x04 \x01(\tR\x06device\x12\x1d\n" +
+	"\n" +
+	"model_name\x18\x05 \x01(\tR\tmodelName\"6\n" +
+	"\x15SaveCheckpointRequest\x12\x1d\n" +
+	"\n" +
+	"model_name\x18\x01 \x01(\tR\tmodelName\"\x83\x01\n" +
+	"\x16SaveCheckpointResponse\x12\x1d\n" +
+	"\n" +
+	"model_name\x18\x01 \x01(\tR\tmodelName\x12%\n" +
+	"\x0epolicy_version\x18\x02 \x01(\x04R\rpolicyVersion\x12#\n" +
+	"\rtraining_step\x18\x03 \x01(\x04R\ftrainingStep2\xd9\x02\n" +
 	"\x0eLearnerService\x12Q\n" +
 	"\fPredictBatch\x12\x1f.learner.v1.PredictBatchRequest\x1a .learner.v1.PredictBatchResponse\x12K\n" +
 	"\n" +
 	"TrainBatch\x12\x1d.learner.v1.TrainBatchRequest\x1a\x1e.learner.v1.TrainBatchResponse\x12N\n" +
-	"\vHealthCheck\x12\x1e.learner.v1.HealthCheckRequest\x1a\x1f.learner.v1.HealthCheckResponseBOZMgithub.com/duongess/khoai-robot-control-framework/gen/go/learner/v1;learnerv1b\x06proto3"
+	"\vHealthCheck\x12\x1e.learner.v1.HealthCheckRequest\x1a\x1f.learner.v1.HealthCheckResponse\x12W\n" +
+	"\x0eSaveCheckpoint\x12!.learner.v1.SaveCheckpointRequest\x1a\".learner.v1.SaveCheckpointResponseBOZMgithub.com/duongess/khoai-robot-control-framework/gen/go/learner/v1;learnerv1b\x06proto3"
 
 var (
 	file_learner_v1_learner_proto_rawDescOnce sync.Once
@@ -498,35 +626,39 @@ func file_learner_v1_learner_proto_rawDescGZIP() []byte {
 	return file_learner_v1_learner_proto_rawDescData
 }
 
-var file_learner_v1_learner_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
+var file_learner_v1_learner_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
 var file_learner_v1_learner_proto_goTypes = []any{
-	(*PredictBatchRequest)(nil),   // 0: learner.v1.PredictBatchRequest
-	(*PredictBatchResponse)(nil),  // 1: learner.v1.PredictBatchResponse
-	(*TrainBatchRequest)(nil),     // 2: learner.v1.TrainBatchRequest
-	(*TrainBatchResponse)(nil),    // 3: learner.v1.TrainBatchResponse
-	(*HealthCheckRequest)(nil),    // 4: learner.v1.HealthCheckRequest
-	(*HealthCheckResponse)(nil),   // 5: learner.v1.HealthCheckResponse
-	(*EnvironmentDescriptor)(nil), // 6: learner.v1.EnvironmentDescriptor
-	(*State)(nil),                 // 7: learner.v1.State
-	(*Action)(nil),                // 8: learner.v1.Action
-	(*TransitionBatch)(nil),       // 9: learner.v1.TransitionBatch
+	(*PredictBatchRequest)(nil),    // 0: learner.v1.PredictBatchRequest
+	(*PredictBatchResponse)(nil),   // 1: learner.v1.PredictBatchResponse
+	(*TrainBatchRequest)(nil),      // 2: learner.v1.TrainBatchRequest
+	(*TrainBatchResponse)(nil),     // 3: learner.v1.TrainBatchResponse
+	(*HealthCheckRequest)(nil),     // 4: learner.v1.HealthCheckRequest
+	(*HealthCheckResponse)(nil),    // 5: learner.v1.HealthCheckResponse
+	(*SaveCheckpointRequest)(nil),  // 6: learner.v1.SaveCheckpointRequest
+	(*SaveCheckpointResponse)(nil), // 7: learner.v1.SaveCheckpointResponse
+	(*EnvironmentDescriptor)(nil),  // 8: learner.v1.EnvironmentDescriptor
+	(*State)(nil),                  // 9: learner.v1.State
+	(*Action)(nil),                 // 10: learner.v1.Action
+	(*TransitionBatch)(nil),        // 11: learner.v1.TransitionBatch
 }
 var file_learner_v1_learner_proto_depIdxs = []int32{
-	6, // 0: learner.v1.PredictBatchRequest.environment:type_name -> learner.v1.EnvironmentDescriptor
-	7, // 1: learner.v1.PredictBatchRequest.states:type_name -> learner.v1.State
-	8, // 2: learner.v1.PredictBatchResponse.actions:type_name -> learner.v1.Action
-	9, // 3: learner.v1.TrainBatchRequest.batch:type_name -> learner.v1.TransitionBatch
-	0, // 4: learner.v1.LearnerService.PredictBatch:input_type -> learner.v1.PredictBatchRequest
-	2, // 5: learner.v1.LearnerService.TrainBatch:input_type -> learner.v1.TrainBatchRequest
-	4, // 6: learner.v1.LearnerService.HealthCheck:input_type -> learner.v1.HealthCheckRequest
-	1, // 7: learner.v1.LearnerService.PredictBatch:output_type -> learner.v1.PredictBatchResponse
-	3, // 8: learner.v1.LearnerService.TrainBatch:output_type -> learner.v1.TrainBatchResponse
-	5, // 9: learner.v1.LearnerService.HealthCheck:output_type -> learner.v1.HealthCheckResponse
-	7, // [7:10] is the sub-list for method output_type
-	4, // [4:7] is the sub-list for method input_type
-	4, // [4:4] is the sub-list for extension type_name
-	4, // [4:4] is the sub-list for extension extendee
-	0, // [0:4] is the sub-list for field type_name
+	8,  // 0: learner.v1.PredictBatchRequest.environment:type_name -> learner.v1.EnvironmentDescriptor
+	9,  // 1: learner.v1.PredictBatchRequest.states:type_name -> learner.v1.State
+	10, // 2: learner.v1.PredictBatchResponse.actions:type_name -> learner.v1.Action
+	11, // 3: learner.v1.TrainBatchRequest.batch:type_name -> learner.v1.TransitionBatch
+	0,  // 4: learner.v1.LearnerService.PredictBatch:input_type -> learner.v1.PredictBatchRequest
+	2,  // 5: learner.v1.LearnerService.TrainBatch:input_type -> learner.v1.TrainBatchRequest
+	4,  // 6: learner.v1.LearnerService.HealthCheck:input_type -> learner.v1.HealthCheckRequest
+	6,  // 7: learner.v1.LearnerService.SaveCheckpoint:input_type -> learner.v1.SaveCheckpointRequest
+	1,  // 8: learner.v1.LearnerService.PredictBatch:output_type -> learner.v1.PredictBatchResponse
+	3,  // 9: learner.v1.LearnerService.TrainBatch:output_type -> learner.v1.TrainBatchResponse
+	5,  // 10: learner.v1.LearnerService.HealthCheck:output_type -> learner.v1.HealthCheckResponse
+	7,  // 11: learner.v1.LearnerService.SaveCheckpoint:output_type -> learner.v1.SaveCheckpointResponse
+	8,  // [8:12] is the sub-list for method output_type
+	4,  // [4:8] is the sub-list for method input_type
+	4,  // [4:4] is the sub-list for extension type_name
+	4,  // [4:4] is the sub-list for extension extendee
+	0,  // [0:4] is the sub-list for field type_name
 }
 
 func init() { file_learner_v1_learner_proto_init() }
@@ -542,7 +674,7 @@ func file_learner_v1_learner_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_learner_v1_learner_proto_rawDesc), len(file_learner_v1_learner_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   6,
+			NumMessages:   8,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

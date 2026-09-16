@@ -18,6 +18,7 @@ type learnerServiceStub struct {
 	learnerv1.UnimplementedLearnerServiceServer
 	predictRequest *learnerv1.PredictBatchRequest
 	trainRequest   *learnerv1.TrainBatchRequest
+	saveRequest    *learnerv1.SaveCheckpointRequest
 }
 
 func (s *learnerServiceStub) HealthCheck(context.Context, *learnerv1.HealthCheckRequest) (*learnerv1.HealthCheckResponse, error) {
@@ -34,6 +35,11 @@ func (s *learnerServiceStub) PredictBatch(_ context.Context, request *learnerv1.
 func (s *learnerServiceStub) TrainBatch(_ context.Context, request *learnerv1.TrainBatchRequest) (*learnerv1.TrainBatchResponse, error) {
 	s.trainRequest = request
 	return &learnerv1.TrainBatchResponse{Accepted: true, SamplesSeen: uint64(len(request.Batch.Transitions)), PolicyVersion: 7}, nil
+}
+
+func (s *learnerServiceStub) SaveCheckpoint(_ context.Context, request *learnerv1.SaveCheckpointRequest) (*learnerv1.SaveCheckpointResponse, error) {
+	s.saveRequest = request
+	return &learnerv1.SaveCheckpointResponse{ModelName: request.GetModelName(), PolicyVersion: 11, TrainingStep: 23}, nil
 }
 
 func TestLearnerClientHealthCheck(t *testing.T) {
@@ -85,6 +91,21 @@ func TestLearnerClientTrainBatchMapsTransition(t *testing.T) {
 	}
 	if !result.Accepted || result.SamplesSeen != 1 || result.PolicyVersion != 7 {
 		t.Fatalf("TrainBatch() result = %#v", result)
+	}
+}
+
+func TestLearnerClientSavesNamedCheckpoint(t *testing.T) {
+	client, service := newTestLearnerClient(t)
+
+	result, err := client.SaveCheckpoint(context.Background(), "grasp-v1")
+	if err != nil {
+		t.Fatalf("SaveCheckpoint() error = %v", err)
+	}
+	if service.saveRequest.GetModelName() != "grasp-v1" {
+		t.Fatalf("SaveCheckpoint() request = %#v", service.saveRequest)
+	}
+	if result.ModelName != "grasp-v1" || result.PolicyVersion != 11 || result.TrainingStep != 23 {
+		t.Fatalf("SaveCheckpoint() result = %#v", result)
 	}
 }
 
