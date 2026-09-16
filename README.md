@@ -53,11 +53,24 @@ LEARNER_CONTROLLER=mlp poetry run python -m ai
 LEARNER_CONTROLLER=fly_connectome \
 LEARNER_GRAPH_PATH=data/connectome/connectome_graph.npz \
 LEARNER_PROPAGATION_STEPS=4 LEARNER_TRAIN_EDGE_GAINS=true \
-LEARNER_ACTION_DEAD_ZONE=0.03 LEARNER_MAX_HORIZONTAL_SPEED=0.2 \
+LEARNER_ACTION_DEAD_ZONE=0.001 LEARNER_MAX_HORIZONTAL_SPEED=0.2 \
 LEARNER_MAX_VERTICAL_SPEED=0.2 poetry run python -m ai
 
 # Same graph size, edge count, in-degree, and out-degree baseline
 LEARNER_CONTROLLER=random_graph LEARNER_GRAPH_PATH=data/connectome/connectome_graph.npz poetry run python -m ai
+```
+
+For a responsive local dashboard, the learner defaults to one PyTorch compute
+thread, one inter-op thread, and retains at most 128 immutable episode-policy
+snapshots. These limits prevent native worker-thread and snapshot-memory growth
+from starving browser rendering. Override them only when the machine has spare
+capacity:
+
+```bash
+LEARNER_TORCH_NUM_THREADS=1 \
+LEARNER_TORCH_NUM_INTEROP_THREADS=1 \
+LEARNER_MAX_POLICY_SNAPSHOTS=128 \
+poetry run python -m ai
 ```
 
 Training remains driven by the existing Go runtime, which sends replay batches to the same gRPC service. Deterministic inference uses the existing `PredictBatch` RPC. There is no standalone robot inference binary in this repository.

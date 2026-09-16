@@ -63,6 +63,7 @@ class LearnerServicer(learner_pb2_grpc.LearnerServiceServicer):
             freeze_topology=self._config.freeze_topology,
             activation=self._config.activation,
             action_dead_zone=self._config.action_dead_zone,
+            min_log_std=self._config.min_log_std,
             max_horizontal_speed=self._config.max_horizontal_speed,
             max_vertical_speed=self._config.max_vertical_speed,
             max_gripper_command=self._config.max_gripper_command,
@@ -73,7 +74,13 @@ class LearnerServicer(learner_pb2_grpc.LearnerServiceServicer):
         self._policy_version = 1
         self._actor_snapshots = {self._policy_version: deepcopy(self._agent.actor).eval()}
         self._policy_lock = threading.RLock()
+        # Training mutates the live SAC networks, whereas prediction uses
+        # immutable actor snapshots. Keep those concerns separate so an update
+        # does not hold the prediction lookup lock for its entire backward pass.
+        self._training_lock = threading.Lock()
         self._training_step = 0
+        self._predict_requests = 0
+        self._train_requests = 0
 
     def PredictBatch(self, request, context):
         try:
@@ -83,22 +90,38 @@ class LearnerServicer(learner_pb2_grpc.LearnerServiceServicer):
             # example, simultaneous right/down motion) and never explores a
             # corrective action. Evaluation can opt in explicitly via
             # LEARNER_DETERMINISTIC_INFERENCE=true.
+            # Snapshots are immutable after publication, so hold the lock only
+            # while looking one up. A prediction can then run concurrently with
+            # the next training update instead of being stuck behind it.
             with self._policy_lock:
                 requested_version = request.policy_version
                 served_version = self._policy_version if requested_version == 0 else requested_version
                 actor = self._actor_snapshots.get(served_version)
-                if actor is None:
-                    context.abort(
-                        grpc.StatusCode.FAILED_PRECONDITION,
-                        f"policy snapshot {served_version} is unavailable; start a fresh episode",
-                    )
+            if actor is None:
+                context.abort(
+                    grpc.StatusCode.FAILED_PRECONDITION,
+                    f"policy snapshot {served_version} is unavailable; start a fresh episode",
+                )
+            with torch.inference_mode():
+                mean, log_std = actor(states)
                 predicted_actions = self._agent.act_with_actor(
                     actor, states, deterministic=self._config.deterministic_inference
                 ).clamp(-1, 1)
         except ValueError as error:
             context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(error))
         actions = [environment_pb2.Action(values=[float(value) for value in action]) for action in predicted_actions]
-        LOGGER.info("predict_batch", extra={"fields": {"states": len(request.states), "requested_policy_version": request.policy_version, "policy_version": served_version, "deterministic": self._config.deterministic_inference}})
+        self._predict_requests += 1
+        if self._predict_requests % self._config.log_every_n_requests == 0:
+            LOGGER.info("predict_batch", extra={"fields": {
+                "states": len(request.states),
+                "requested_policy_version": request.policy_version,
+                "policy_version": served_version,
+                "deterministic": self._config.deterministic_inference,
+                "action_mean": [float(value) for value in predicted_actions.mean(dim=0)],
+                "action_std": [float(value) for value in predicted_actions.std(dim=0, unbiased=False)],
+                "actor_mean_pre_tanh": [float(value) for value in mean.detach().mean(dim=0)],
+                "actor_log_std": [float(value) for value in log_std.detach().mean(dim=0)],
+            }})
         return learner_pb2.PredictBatchResponse(actions=actions, policy_version=served_version)
 
     def TrainBatch(self, request, context):
@@ -106,16 +129,41 @@ class LearnerServicer(learner_pb2_grpc.LearnerServiceServicer):
             context.abort(grpc.StatusCode.INVALID_ARGUMENT, "transition batch is required")
         try:
             batch = self._batch_to_tensors(request.batch.transitions)
-            with self._policy_lock:
+            # The Go runtime already applies backpressure, and this lock also
+            # makes the service safe if another client submits a train request.
+            # Prediction continues against its prior immutable snapshot while
+            # the live actor/critics perform a backward pass.
+            with self._training_lock:
                 metrics = self._agent.update(batch)
-                self._policy_version += 1
-                self._actor_snapshots[self._policy_version] = deepcopy(self._agent.actor).eval()
+                snapshot = deepcopy(self._agent.actor).eval()
+                with self._policy_lock:
+                    self._policy_version += 1
+                    self._actor_snapshots[self._policy_version] = snapshot
+                    while len(self._actor_snapshots) > self._config.max_policy_snapshots:
+                        del self._actor_snapshots[min(self._actor_snapshots)]
         except ValueError as error:
             context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(error))
         self._samples_seen += len(request.batch.transitions)
         self._training_step += 1
-        LOGGER.info("train_batch", extra={"fields": {"received": len(request.batch.transitions), "samples_seen": self._samples_seen, **metrics}})
-        return learner_pb2.TrainBatchResponse(accepted=True, samples_seen=self._samples_seen, policy_version=self._policy_version, actor_loss=metrics["actor_loss"], critic_loss=(metrics["critic_one_loss"] + metrics["critic_two_loss"]) / 2, alpha_loss=metrics["alpha_loss"], entropy=metrics["entropy"], training_step=self._training_step)
+        self._train_requests += 1
+        if self._train_requests % self._config.log_every_n_requests == 0:
+            LOGGER.info("train_batch", extra={"fields": {"received": len(request.batch.transitions), "samples_seen": self._samples_seen, **metrics}})
+        return learner_pb2.TrainBatchResponse(
+            accepted=True,
+            samples_seen=self._samples_seen,
+            policy_version=self._policy_version,
+            actor_loss=metrics["actor_loss"],
+            critic_loss=(metrics["critic_one_loss"] + metrics["critic_two_loss"]) / 2,
+            alpha_loss=metrics["alpha_loss"],
+            entropy=metrics["entropy"],
+            training_step=self._training_step,
+            critic_one_q=metrics["critic_one_q"],
+            critic_two_q=metrics["critic_two_q"],
+            alpha=metrics["alpha"],
+            actor_log_std_horizontal=metrics["actor_log_std_horizontal"],
+            actor_log_std_vertical=metrics["actor_log_std_vertical"],
+            actor_log_std_gripper=metrics["actor_log_std_gripper"],
+        )
 
     def HealthCheck(self, request, context):
         return learner_pb2.HealthCheckResponse(ready=True, policy_version=self._policy_version, training_step=self._training_step, device=str(self._agent.device))
@@ -153,16 +201,22 @@ class LearnerServicer(learner_pb2_grpc.LearnerServiceServicer):
         return batch
 
 
-def create_server() -> grpc.Server:
-    server = grpc.server(futures.ThreadPoolExecutor(max_workers=1))
-    learner_pb2_grpc.add_LearnerServiceServicer_to_server(LearnerServicer(), server)
+def create_server(config: LearnerConfig | None = None) -> grpc.Server:
+    server = grpc.server(futures.ThreadPoolExecutor(max_workers=2))
+    learner_pb2_grpc.add_LearnerServiceServicer_to_server(LearnerServicer(config), server)
     if server.add_insecure_port(ADDRESS) == 0:
         raise RuntimeError(f"could not bind learner server to {ADDRESS}")
     return server
 
 
 def serve() -> None:
-    server = create_server()
+    config = LearnerConfig.from_environment()
+    # Set these before any gRPC work is accepted. Limiting threads prevents a
+    # small CPU actor/critic update from spawning enough native workers to make
+    # the browser and desktop unresponsive.
+    torch.set_num_threads(config.torch_num_threads)
+    torch.set_num_interop_threads(config.torch_num_interop_threads)
+    server = create_server(config)
     server.start()
     LOGGER.info("server_started", extra={"fields": {"address": ADDRESS}})
 

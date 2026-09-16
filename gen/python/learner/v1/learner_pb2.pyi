@@ -35,7 +35,7 @@ class TrainBatchRequest(_message.Message):
     def __init__(self, batch: _Optional[_Union[_transition_pb2.TransitionBatch, _Mapping]] = ..., policy_version: _Optional[int] = ...) -> None: ...
 
 class TrainBatchResponse(_message.Message):
-    __slots__ = ("accepted", "samples_seen", "policy_version", "actor_loss", "critic_loss", "alpha_loss", "entropy", "training_step")
+    __slots__ = ("accepted", "samples_seen", "policy_version", "actor_loss", "critic_loss", "alpha_loss", "entropy", "training_step", "critic_one_q", "critic_two_q", "alpha", "actor_log_std_horizontal", "actor_log_std_vertical", "actor_log_std_gripper")
     ACCEPTED_FIELD_NUMBER: _ClassVar[int]
     SAMPLES_SEEN_FIELD_NUMBER: _ClassVar[int]
     POLICY_VERSION_FIELD_NUMBER: _ClassVar[int]
@@ -44,6 +44,12 @@ class TrainBatchResponse(_message.Message):
     ALPHA_LOSS_FIELD_NUMBER: _ClassVar[int]
     ENTROPY_FIELD_NUMBER: _ClassVar[int]
     TRAINING_STEP_FIELD_NUMBER: _ClassVar[int]
+    CRITIC_ONE_Q_FIELD_NUMBER: _ClassVar[int]
+    CRITIC_TWO_Q_FIELD_NUMBER: _ClassVar[int]
+    ALPHA_FIELD_NUMBER: _ClassVar[int]
+    ACTOR_LOG_STD_HORIZONTAL_FIELD_NUMBER: _ClassVar[int]
+    ACTOR_LOG_STD_VERTICAL_FIELD_NUMBER: _ClassVar[int]
+    ACTOR_LOG_STD_GRIPPER_FIELD_NUMBER: _ClassVar[int]
     accepted: bool
     samples_seen: int
     policy_version: int
@@ -52,7 +58,13 @@ class TrainBatchResponse(_message.Message):
     alpha_loss: float
     entropy: float
     training_step: int
-    def __init__(self, accepted: _Optional[bool] = ..., samples_seen: _Optional[int] = ..., policy_version: _Optional[int] = ..., actor_loss: _Optional[float] = ..., critic_loss: _Optional[float] = ..., alpha_loss: _Optional[float] = ..., entropy: _Optional[float] = ..., training_step: _Optional[int] = ...) -> None: ...
+    critic_one_q: float
+    critic_two_q: float
+    alpha: float
+    actor_log_std_horizontal: float
+    actor_log_std_vertical: float
+    actor_log_std_gripper: float
+    def __init__(self, accepted: _Optional[bool] = ..., samples_seen: _Optional[int] = ..., policy_version: _Optional[int] = ..., actor_loss: _Optional[float] = ..., critic_loss: _Optional[float] = ..., alpha_loss: _Optional[float] = ..., entropy: _Optional[float] = ..., training_step: _Optional[int] = ..., critic_one_q: _Optional[float] = ..., critic_two_q: _Optional[float] = ..., alpha: _Optional[float] = ..., actor_log_std_horizontal: _Optional[float] = ..., actor_log_std_vertical: _Optional[float] = ..., actor_log_std_gripper: _Optional[float] = ...) -> None: ...
 
 class HealthCheckRequest(_message.Message):
     __slots__ = ()

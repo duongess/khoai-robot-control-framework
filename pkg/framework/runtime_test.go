@@ -58,6 +58,23 @@ func (l *runtimeTestLearner) TrainBatch(_ context.Context, transitions []Transit
 }
 func (l *runtimeTestLearner) Close() error { return nil }
 
+type blockingTrainingLearner struct {
+	runtimeTestLearner
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (l *blockingTrainingLearner) TrainBatch(_ context.Context, _ []Transition) (TrainingResult, error) {
+	l.mu.Lock()
+	l.trainings++
+	trainingStep := l.trainings
+	l.mu.Unlock()
+	l.once.Do(func() { close(l.started) })
+	<-l.release
+	return TrainingResult{Accepted: true, PolicyVersion: 2, TrainingStep: uint64(trainingStep)}, nil
+}
+
 func TestReplayBufferOverwritesAndSamplesCopies(t *testing.T) {
 	buffer, err := NewReplayBuffer(2, 1)
 	if err != nil {
@@ -92,7 +109,7 @@ func TestRuntimeBatchesWorkersAndSupportsPauseResume(t *testing.T) {
 		t.Fatal(err)
 	}
 	config := DefaultRuntimeConfig()
-	config.WorkerCount, config.TickInterval, config.WarmupTransitions, config.TrainingBatchSize, config.TrainingInterval = 2, time.Millisecond, 2, 2, 1
+	config.WorkerCount, config.TickInterval, config.RandomActionWarmupTransitions, config.WarmupTransitions, config.TrainingBatchSize, config.TrainingInterval = 2, time.Millisecond, 0, 2, 2, 1
 	if err := runtime.Configure(config, learner); err != nil {
 		t.Fatal(err)
 	}
@@ -145,7 +162,7 @@ func TestRuntimeRejectsUnsafePolicyActionsBeforeTaskStep(t *testing.T) {
 		t.Fatal(err)
 	}
 	config := DefaultRuntimeConfig()
-	config.WorkerCount, config.TickInterval = 1, time.Millisecond
+	config.WorkerCount, config.TickInterval, config.RandomActionWarmupTransitions = 1, time.Millisecond, 0
 	if err := runtime.Configure(config, learner); err != nil {
 		t.Fatal(err)
 	}
@@ -161,4 +178,78 @@ func TestRuntimeRejectsUnsafePolicyActionsBeforeTaskStep(t *testing.T) {
 	if runtime.Snapshot().Status != RuntimeError {
 		t.Fatalf("runtime did not reject unsafe action: %#v", runtime.Snapshot())
 	}
+}
+
+func TestRuntimeUsesNonZeroRandomActionsBeforePolicyWarmup(t *testing.T) {
+	learner := &runtimeTestLearner{}
+	runtime := NewRuntime()
+	if err := runtime.RegisterTask(TaskRegistration{Descriptor: TaskDescriptor{Name: "warmup", StateDimension: 2, ActionDimension: 3, ActionMin: -1, ActionMax: 1}, Factory: runtimeTestFactory{}}); err != nil {
+		t.Fatal(err)
+	}
+	config := DefaultRuntimeConfig()
+	config.WorkerCount, config.TickInterval, config.RandomActionWarmupTransitions, config.WarmupTransitions = 1, time.Millisecond, 8, 100
+	if err := runtime.Configure(config, learner); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := runtime.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for runtime.Snapshot().TotalSteps < 4 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	runtime.Stop()
+	snapshot := runtime.Snapshot()
+	if snapshot.TotalSteps < 4 {
+		t.Fatalf("random warm-up did not step: %#v", snapshot)
+	}
+	if learner.predictions != 0 {
+		t.Fatalf("random warm-up called actor %d times", learner.predictions)
+	}
+	if snapshot.Workers[0].ActionSource != "random_warmup" {
+		t.Fatalf("action source = %q, want random_warmup", snapshot.Workers[0].ActionSource)
+	}
+	stats := snapshot.ActionStatistics
+	if stats.Samples == 0 || len(stats.RawStd) != 3 || stats.RawStd[0] == 0 || stats.RawStd[1] == 0 || stats.RawStd[2] == 0 {
+		t.Fatalf("warm-up actions were not diverse: %#v", stats)
+	}
+}
+
+func TestRuntimeSchedulesAtMostOneTrainingBatchAtATime(t *testing.T) {
+	learner := &blockingTrainingLearner{started: make(chan struct{}), release: make(chan struct{})}
+	runtime := NewRuntime()
+	if err := runtime.RegisterTask(TaskRegistration{Descriptor: TaskDescriptor{Name: "backpressure", StateDimension: 2, ActionDimension: 1, ActionMin: -1, ActionMax: 1}, Factory: runtimeTestFactory{}}); err != nil {
+		t.Fatal(err)
+	}
+	config := DefaultRuntimeConfig()
+	config.WorkerCount, config.TickInterval, config.RandomActionWarmupTransitions, config.WarmupTransitions, config.TrainingBatchSize, config.TrainingInterval = 1, time.Millisecond, 0, 1, 1, 1
+	if err := runtime.Configure(config, learner); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := runtime.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-learner.started:
+	case <-time.After(time.Second):
+		runtime.Stop()
+		t.Fatal("runtime did not start a training batch")
+	}
+	// Several physics ticks pass while the learner update is blocked. A second
+	// update must not be queued behind the first one.
+	time.Sleep(20 * time.Millisecond)
+	learner.mu.Lock()
+	trainings := learner.trainings
+	learner.mu.Unlock()
+	if trainings != 1 {
+		close(learner.release)
+		runtime.Stop()
+		t.Fatalf("concurrent or queued training calls = %d, want 1", trainings)
+	}
+	close(learner.release)
+	runtime.Stop()
 }

@@ -8,7 +8,7 @@ from torch.distributions import Normal
 class GaussianActor(nn.Module):
     """A Gaussian policy with tanh-squashed continuous actions."""
 
-    def __init__(self, state_dim: int, action_dim: int, hidden_dim: int) -> None:
+    def __init__(self, state_dim: int, action_dim: int, hidden_dim: int, min_log_std: float = -3.0) -> None:
         super().__init__()
         self.backbone = nn.Sequential(
             nn.Linear(state_dim, hidden_dim),
@@ -18,10 +18,11 @@ class GaussianActor(nn.Module):
         )
         self.mean = nn.Linear(hidden_dim, action_dim)
         self.log_std = nn.Linear(hidden_dim, action_dim)
+        self.min_log_std = min_log_std
 
     def forward(self, states: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         features = self.backbone(states)
-        return self.mean(features), self.log_std(features).clamp(-20, 2)
+        return self.mean(features), self.log_std(features).clamp(self.min_log_std, 2)
 
     def sample(self, states: torch.Tensor, deterministic: bool = False) -> tuple[torch.Tensor, torch.Tensor]:
         mean, log_std = self(states)

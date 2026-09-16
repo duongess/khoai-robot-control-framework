@@ -38,14 +38,20 @@ type PredictionResult struct {
 }
 
 type TrainingResult struct {
-	Accepted      bool
-	SamplesSeen   uint64
-	ActorLoss     float32
-	CriticLoss    float32
-	AlphaLoss     float32
-	Entropy       float32
-	PolicyVersion uint64
-	TrainingStep  uint64
+	Accepted              bool
+	SamplesSeen           uint64
+	ActorLoss             float32
+	CriticLoss            float32
+	AlphaLoss             float32
+	Entropy               float32
+	CriticOneQ            float32
+	CriticTwoQ            float32
+	Alpha                 float32
+	ActorLogStdHorizontal float32
+	ActorLogStdVertical   float32
+	ActorLogStdGripper    float32
+	PolicyVersion         uint64
+	TrainingStep          uint64
 }
 
 // LearnerClient is the gRPC adapter. Generated protobuf types stay private to it.
@@ -148,11 +154,11 @@ func (c *LearnerClient) TrainBatch(ctx context.Context, transitions []Transition
 	if err != nil {
 		return TrainingResult{}, fmt.Errorf("train batch: %w", err)
 	}
-	metrics := []float32{response.GetActorLoss(), response.GetCriticLoss(), response.GetAlphaLoss(), response.GetEntropy()}
+	metrics := []float32{response.GetActorLoss(), response.GetCriticLoss(), response.GetAlphaLoss(), response.GetEntropy(), response.GetCriticOneQ(), response.GetCriticTwoQ(), response.GetAlpha(), response.GetActorLogStdHorizontal(), response.GetActorLogStdVertical(), response.GetActorLogStdGripper()}
 	if err := validateFinite("training metric", metrics); err != nil {
 		return TrainingResult{}, err
 	}
-	return TrainingResult{Accepted: response.GetAccepted(), SamplesSeen: response.GetSamplesSeen(), ActorLoss: response.GetActorLoss(), CriticLoss: response.GetCriticLoss(), AlphaLoss: response.GetAlphaLoss(), Entropy: response.GetEntropy(), PolicyVersion: response.GetPolicyVersion(), TrainingStep: response.GetTrainingStep()}, nil
+	return TrainingResult{Accepted: response.GetAccepted(), SamplesSeen: response.GetSamplesSeen(), ActorLoss: response.GetActorLoss(), CriticLoss: response.GetCriticLoss(), AlphaLoss: response.GetAlphaLoss(), Entropy: response.GetEntropy(), CriticOneQ: response.GetCriticOneQ(), CriticTwoQ: response.GetCriticTwoQ(), Alpha: response.GetAlpha(), ActorLogStdHorizontal: response.GetActorLogStdHorizontal(), ActorLogStdVertical: response.GetActorLogStdVertical(), ActorLogStdGripper: response.GetActorLogStdGripper(), PolicyVersion: response.GetPolicyVersion(), TrainingStep: response.GetTrainingStep()}, nil
 }
 
 func (c *LearnerClient) Close() error {

@@ -22,7 +22,10 @@ class SACConfig:
     train_edge_gains: bool = True
     freeze_topology: bool = True
     activation: str = "tanh"
-    action_dead_zone: float = 0.03
+    action_dead_zone: float = 0.001
+    # Maintain a modest variance floor during stochastic data collection. This
+    # does not affect explicit deterministic evaluation requests.
+    min_log_std: float = -3.0
     max_horizontal_speed: float = 1.0
     max_vertical_speed: float = 1.0
     max_gripper_command: float = 1.0
@@ -40,14 +43,16 @@ class SACConfig:
             raise ValueError(f"connectome graph does not exist: {self.graph_path}")
         if not self.freeze_topology:
             raise ValueError("freeze_topology must remain true; creating graph edges is unsupported")
+        if self.min_log_std > 2:
+            raise ValueError("min_log_std must not exceed 2")
 
 
 @dataclass(frozen=True)
 class LearnerConfig:
-    # The force-control task emits 22 values. Keep the dataclass default aligned
+    # The force-control task emits 23 values. Keep the dataclass default aligned
     # with from_environment() so an in-process servicer cannot start with a
     # different observation schema than the gRPC process.
-    state_dim: int = 22
+    state_dim: int = 23
     action_dim: int = 3
     controller_type: str = "mlp"
     graph_path: str | None = None
@@ -55,18 +60,39 @@ class LearnerConfig:
     train_edge_gains: bool = True
     freeze_topology: bool = True
     activation: str = "tanh"
-    action_dead_zone: float = 0.03
+    action_dead_zone: float = 0.001
+    min_log_std: float = -3.0
     max_horizontal_speed: float = 1.0
     max_vertical_speed: float = 1.0
     max_gripper_command: float = 1.0
     deterministic_inference: bool = False
+    # Keep the local learner responsive on development machines. These values
+    # control PyTorch compute threads, not the number of simulated workers.
+    torch_num_threads: int = 1
+    torch_num_interop_threads: int = 1
+    # Episodes pin an immutable actor snapshot. Bound their cache so a long
+    # training run cannot retain one full model per gradient update forever.
+    max_policy_snapshots: int = 128
+    # Per-request inference/training logs are expensive at a 20 Hz control
+    # rate, especially when the terminal is rendering a browser dashboard.
+    log_every_n_requests: int = 100
+
+    def __post_init__(self) -> None:
+        if self.state_dim <= 0 or self.action_dim <= 0:
+            raise ValueError("state_dim and action_dim must be positive")
+        if self.torch_num_threads <= 0 or self.torch_num_interop_threads <= 0:
+            raise ValueError("PyTorch thread counts must be positive")
+        if self.max_policy_snapshots < 2:
+            raise ValueError("max_policy_snapshots must be at least 2")
+        if self.log_every_n_requests <= 0:
+            raise ValueError("log_every_n_requests must be positive")
 
     @classmethod
     def from_environment(cls) -> "LearnerConfig":
         try:
             graph_path = os.environ.get("LEARNER_GRAPH_PATH")
             return cls(
-                state_dim=int(os.environ.get("LEARNER_STATE_DIM", "22")),
+                state_dim=int(os.environ.get("LEARNER_STATE_DIM", "23")),
                 action_dim=int(os.environ.get("LEARNER_ACTION_DIM", "3")),
                 controller_type=os.environ.get("LEARNER_CONTROLLER", "mlp"),
                 graph_path=graph_path,
@@ -74,11 +100,16 @@ class LearnerConfig:
                 train_edge_gains=os.environ.get("LEARNER_TRAIN_EDGE_GAINS", "true").lower() == "true",
                 freeze_topology=os.environ.get("LEARNER_FREEZE_TOPOLOGY", "true").lower() == "true",
                 activation=os.environ.get("LEARNER_ACTIVATION", "tanh"),
-                action_dead_zone=float(os.environ.get("LEARNER_ACTION_DEAD_ZONE", "0.03")),
+                action_dead_zone=float(os.environ.get("LEARNER_ACTION_DEAD_ZONE", "0.001")),
+                min_log_std=float(os.environ.get("LEARNER_MIN_LOG_STD", "-3.0")),
                 max_horizontal_speed=float(os.environ.get("LEARNER_MAX_HORIZONTAL_SPEED", "1.0")),
                 max_vertical_speed=float(os.environ.get("LEARNER_MAX_VERTICAL_SPEED", "1.0")),
                 max_gripper_command=float(os.environ.get("LEARNER_MAX_GRIPPER_COMMAND", "1.0")),
                 deterministic_inference=os.environ.get("LEARNER_DETERMINISTIC_INFERENCE", "false").lower() == "true",
+                torch_num_threads=int(os.environ.get("LEARNER_TORCH_NUM_THREADS", "1")),
+                torch_num_interop_threads=int(os.environ.get("LEARNER_TORCH_NUM_INTEROP_THREADS", "1")),
+                max_policy_snapshots=int(os.environ.get("LEARNER_MAX_POLICY_SNAPSHOTS", "128")),
+                log_every_n_requests=int(os.environ.get("LEARNER_LOG_EVERY_N_REQUESTS", "100")),
             )
         except ValueError as error:
-            raise ValueError("LEARNER_STATE_DIM and LEARNER_ACTION_DIM must be integers") from error
+            raise ValueError("learner environment configuration contains an invalid numeric value") from error

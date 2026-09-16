@@ -98,7 +98,7 @@ def test_graph_actor_trains_one_sac_step_without_neuprint(tmp_path) -> None:
         states=torch.zeros((4, 3)), actions=torch.zeros((4, 3)), rewards=torch.ones((4, 1)), next_states=torch.ones((4, 3)), dones=torch.zeros((4, 1)),
     )
     metrics = agent.update(batch)
-    assert set(metrics) == {"actor_loss", "alpha_loss", "entropy", "critic_one_loss", "critic_two_loss"}
+    assert {"actor_loss", "alpha_loss", "entropy", "critic_one_loss", "critic_two_loss", "critic_one_q", "critic_two_q", "alpha", "actor_log_std_horizontal", "actor_log_std_vertical", "actor_log_std_gripper"}.issubset(metrics)
     assert all(np.isfinite(value) for value in metrics.values())
 
 

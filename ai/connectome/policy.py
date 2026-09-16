@@ -40,6 +40,7 @@ class FlyConnectomePolicy(nn.Module):
         activation: str = "tanh",
         input_group: str = "sensory",
         action_dead_zone: float = 0.1,
+        min_log_std: float = -3.0,
         max_horizontal_speed: float = 1.0,
         max_vertical_speed: float = 1.0,
         max_gripper_command: float = 1.0,
@@ -68,6 +69,7 @@ class FlyConnectomePolicy(nn.Module):
         self.node_count = graph.node_count
         self.propagation_steps = propagation_steps
         self.action_dead_zone = action_dead_zone
+        self.min_log_std = min_log_std
         self.register_buffer("adjacency", graph.torch_adjacency())
         self.register_buffer("base_edge_weights", torch.tensor(graph.weights, dtype=torch.float32))
         self.register_buffer("edge_indices", torch.tensor(graph.edge_index[[1, 0]], dtype=torch.long))
@@ -113,7 +115,7 @@ class FlyConnectomePolicy(nn.Module):
             mean = torch.cat((mean, mean.new_zeros((batch, self.action_dim - 3))), dim=1)
         elif self.action_dim < 3:
             mean = mean[:, : self.action_dim]
-        return mean, self.log_std.clamp(-20, 2).expand_as(mean)
+        return mean, self.log_std.clamp(self.min_log_std, 2).expand_as(mean)
 
     def sample(self, observation: torch.Tensor, deterministic: bool = False) -> tuple[torch.Tensor, torch.Tensor]:
         mean, log_std = self(observation)
@@ -140,8 +142,10 @@ class FlyConnectomePolicy(nn.Module):
             channels[:, 4] - channels[:, 5],
         ), dim=1)
         actions = torch.tanh(actions) * self.action_limits
-        dead = torch.abs(actions) < self.action_dead_zone
-        return torch.where(dead, torch.zeros_like(actions), actions).clamp(-1.0, 1.0)
+        # The environment owns the hardware dead zone and reports when it
+        # removes a command. Keeping the actor output continuous here preserves
+        # trainable small corrections for SAC.
+        return actions.clamp(-1.0, 1.0)
 
     def _weighted_adjacency(self) -> torch.Tensor:
         values = self.base_edge_weights * torch.exp(self.edge_log_gains.clamp(-4, 4))

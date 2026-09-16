@@ -6,6 +6,6 @@ controller:
   train_edge_gains: true
   freeze_topology: true
   activation: tanh
-  action_dead_zone: 0.03
+  action_dead_zone: 0.001
   max_horizontal_speed: 0.2
   max_vertical_speed: 0.2

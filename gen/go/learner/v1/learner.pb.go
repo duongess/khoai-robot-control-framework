@@ -186,17 +186,23 @@ func (x *TrainBatchRequest) GetPolicyVersion() uint64 {
 }
 
 type TrainBatchResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Accepted      bool                   `protobuf:"varint,1,opt,name=accepted,proto3" json:"accepted,omitempty"`
-	SamplesSeen   uint64                 `protobuf:"varint,2,opt,name=samples_seen,json=samplesSeen,proto3" json:"samples_seen,omitempty"`
-	PolicyVersion uint64                 `protobuf:"varint,3,opt,name=policy_version,json=policyVersion,proto3" json:"policy_version,omitempty"`
-	ActorLoss     float32                `protobuf:"fixed32,4,opt,name=actor_loss,json=actorLoss,proto3" json:"actor_loss,omitempty"`
-	CriticLoss    float32                `protobuf:"fixed32,5,opt,name=critic_loss,json=criticLoss,proto3" json:"critic_loss,omitempty"`
-	AlphaLoss     float32                `protobuf:"fixed32,6,opt,name=alpha_loss,json=alphaLoss,proto3" json:"alpha_loss,omitempty"`
-	Entropy       float32                `protobuf:"fixed32,7,opt,name=entropy,proto3" json:"entropy,omitempty"`
-	TrainingStep  uint64                 `protobuf:"varint,8,opt,name=training_step,json=trainingStep,proto3" json:"training_step,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state                 protoimpl.MessageState `protogen:"open.v1"`
+	Accepted              bool                   `protobuf:"varint,1,opt,name=accepted,proto3" json:"accepted,omitempty"`
+	SamplesSeen           uint64                 `protobuf:"varint,2,opt,name=samples_seen,json=samplesSeen,proto3" json:"samples_seen,omitempty"`
+	PolicyVersion         uint64                 `protobuf:"varint,3,opt,name=policy_version,json=policyVersion,proto3" json:"policy_version,omitempty"`
+	ActorLoss             float32                `protobuf:"fixed32,4,opt,name=actor_loss,json=actorLoss,proto3" json:"actor_loss,omitempty"`
+	CriticLoss            float32                `protobuf:"fixed32,5,opt,name=critic_loss,json=criticLoss,proto3" json:"critic_loss,omitempty"`
+	AlphaLoss             float32                `protobuf:"fixed32,6,opt,name=alpha_loss,json=alphaLoss,proto3" json:"alpha_loss,omitempty"`
+	Entropy               float32                `protobuf:"fixed32,7,opt,name=entropy,proto3" json:"entropy,omitempty"`
+	TrainingStep          uint64                 `protobuf:"varint,8,opt,name=training_step,json=trainingStep,proto3" json:"training_step,omitempty"`
+	CriticOneQ            float32                `protobuf:"fixed32,9,opt,name=critic_one_q,json=criticOneQ,proto3" json:"critic_one_q,omitempty"`
+	CriticTwoQ            float32                `protobuf:"fixed32,10,opt,name=critic_two_q,json=criticTwoQ,proto3" json:"critic_two_q,omitempty"`
+	Alpha                 float32                `protobuf:"fixed32,11,opt,name=alpha,proto3" json:"alpha,omitempty"`
+	ActorLogStdHorizontal float32                `protobuf:"fixed32,12,opt,name=actor_log_std_horizontal,json=actorLogStdHorizontal,proto3" json:"actor_log_std_horizontal,omitempty"`
+	ActorLogStdVertical   float32                `protobuf:"fixed32,13,opt,name=actor_log_std_vertical,json=actorLogStdVertical,proto3" json:"actor_log_std_vertical,omitempty"`
+	ActorLogStdGripper    float32                `protobuf:"fixed32,14,opt,name=actor_log_std_gripper,json=actorLogStdGripper,proto3" json:"actor_log_std_gripper,omitempty"`
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
 }
 
 func (x *TrainBatchResponse) Reset() {
@@ -281,6 +287,48 @@ func (x *TrainBatchResponse) GetEntropy() float32 {
 func (x *TrainBatchResponse) GetTrainingStep() uint64 {
 	if x != nil {
 		return x.TrainingStep
+	}
+	return 0
+}
+
+func (x *TrainBatchResponse) GetCriticOneQ() float32 {
+	if x != nil {
+		return x.CriticOneQ
+	}
+	return 0
+}
+
+func (x *TrainBatchResponse) GetCriticTwoQ() float32 {
+	if x != nil {
+		return x.CriticTwoQ
+	}
+	return 0
+}
+
+func (x *TrainBatchResponse) GetAlpha() float32 {
+	if x != nil {
+		return x.Alpha
+	}
+	return 0
+}
+
+func (x *TrainBatchResponse) GetActorLogStdHorizontal() float32 {
+	if x != nil {
+		return x.ActorLogStdHorizontal
+	}
+	return 0
+}
+
+func (x *TrainBatchResponse) GetActorLogStdVertical() float32 {
+	if x != nil {
+		return x.ActorLogStdVertical
+	}
+	return 0
+}
+
+func (x *TrainBatchResponse) GetActorLogStdGripper() float32 {
+	if x != nil {
+		return x.ActorLogStdGripper
 	}
 	return 0
 }
@@ -404,7 +452,7 @@ const file_learner_v1_learner_proto_rawDesc = "" +
 	"\x0epolicy_version\x18\x02 \x01(\x04R\rpolicyVersion\"m\n" +
 	"\x11TrainBatchRequest\x121\n" +
 	"\x05batch\x18\x01 \x01(\v2\x1b.learner.v1.TransitionBatchR\x05batch\x12%\n" +
-	"\x0epolicy_version\x18\x02 \x01(\x04R\rpolicyVersion\"\x98\x02\n" +
+	"\x0epolicy_version\x18\x02 \x01(\x04R\rpolicyVersion\"\x93\x04\n" +
 	"\x12TrainBatchResponse\x12\x1a\n" +
 	"\baccepted\x18\x01 \x01(\bR\baccepted\x12!\n" +
 	"\fsamples_seen\x18\x02 \x01(\x04R\vsamplesSeen\x12%\n" +
@@ -416,7 +464,16 @@ const file_learner_v1_learner_proto_rawDesc = "" +
 	"\n" +
 	"alpha_loss\x18\x06 \x01(\x02R\talphaLoss\x12\x18\n" +
 	"\aentropy\x18\a \x01(\x02R\aentropy\x12#\n" +
-	"\rtraining_step\x18\b \x01(\x04R\ftrainingStep\"\x14\n" +
+	"\rtraining_step\x18\b \x01(\x04R\ftrainingStep\x12 \n" +
+	"\fcritic_one_q\x18\t \x01(\x02R\n" +
+	"criticOneQ\x12 \n" +
+	"\fcritic_two_q\x18\n" +
+	" \x01(\x02R\n" +
+	"criticTwoQ\x12\x14\n" +
+	"\x05alpha\x18\v \x01(\x02R\x05alpha\x127\n" +
+	"\x18actor_log_std_horizontal\x18\f \x01(\x02R\x15actorLogStdHorizontal\x123\n" +
+	"\x16actor_log_std_vertical\x18\r \x01(\x02R\x13actorLogStdVertical\x121\n" +
+	"\x15actor_log_std_gripper\x18\x0e \x01(\x02R\x12actorLogStdGripper\"\x14\n" +
 	"\x12HealthCheckRequest\"\x8f\x01\n" +
 	"\x13HealthCheckResponse\x12\x14\n" +
 	"\x05ready\x18\x01 \x01(\bR\x05ready\x12%\n" +

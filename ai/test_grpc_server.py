@@ -69,3 +69,14 @@ def test_policy_snapshot_remains_available_after_training():
         AbortContext(),
     )
     assert pinned.policy_version == 1
+
+
+def test_policy_snapshot_cache_is_bounded():
+    servicer = LearnerServicer(LearnerConfig(state_dim=3, action_dim=3, max_policy_snapshots=2))
+    transitions = [transition_pb2.Transition(state=environment_pb2.State(values=[0.0, 0.1, 0.2]), action=environment_pb2.Action(values=[0.0, 0.0, 0.0]), reward=1.0, next_state=environment_pb2.State(values=[0.1, 0.2, 0.3])) for _ in range(4)]
+    request = learner_pb2.TrainBatchRequest(batch=transition_pb2.TransitionBatch(transitions=transitions))
+    servicer.TrainBatch(request, AbortContext())
+    servicer.TrainBatch(request, AbortContext())
+    servicer.TrainBatch(request, AbortContext())
+    assert len(servicer._actor_snapshots) == 2
+    assert set(servicer._actor_snapshots) == {3, 4}

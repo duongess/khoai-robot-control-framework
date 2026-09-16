@@ -26,7 +26,7 @@ from learner.v1 import environment_pb2 as learner_dot_v1_dot_environment__pb2
 from learner.v1 import transition_pb2 as learner_dot_v1_dot_transition__pb2
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x18learner/v1/learner.proto\x12\nlearner.v1\x1a\x1clearner/v1/environment.proto\x1a\x1blearner/v1/transition.proto\"\x88\x01\n\x13PredictBatchRequest\x12\x36\n\x0b\x65nvironment\x18\x01 \x01(\x0b\x32!.learner.v1.EnvironmentDescriptor\x12!\n\x06states\x18\x02 \x03(\x0b\x32\x11.learner.v1.State\x12\x16\n\x0epolicy_version\x18\x03 \x01(\x04\"S\n\x14PredictBatchResponse\x12#\n\x07\x61\x63tions\x18\x01 \x03(\x0b\x32\x12.learner.v1.Action\x12\x16\n\x0epolicy_version\x18\x02 \x01(\x04\"W\n\x11TrainBatchRequest\x12*\n\x05\x62\x61tch\x18\x01 \x01(\x0b\x32\x1b.learner.v1.TransitionBatch\x12\x16\n\x0epolicy_version\x18\x02 \x01(\x04\"\xb9\x01\n\x12TrainBatchResponse\x12\x10\n\x08\x61\x63\x63\x65pted\x18\x01 \x01(\x08\x12\x14\n\x0csamples_seen\x18\x02 \x01(\x04\x12\x16\n\x0epolicy_version\x18\x03 \x01(\x04\x12\x12\n\nactor_loss\x18\x04 \x01(\x02\x12\x13\n\x0b\x63ritic_loss\x18\x05 \x01(\x02\x12\x12\n\nalpha_loss\x18\x06 \x01(\x02\x12\x0f\n\x07\x65ntropy\x18\x07 \x01(\x02\x12\x15\n\rtraining_step\x18\x08 \x01(\x04\"\x14\n\x12HealthCheckRequest\"c\n\x13HealthCheckResponse\x12\r\n\x05ready\x18\x01 \x01(\x08\x12\x16\n\x0epolicy_version\x18\x02 \x01(\x04\x12\x15\n\rtraining_step\x18\x03 \x01(\x04\x12\x0e\n\x06\x64\x65vice\x18\x04 \x01(\t2\x80\x02\n\x0eLearnerService\x12Q\n\x0cPredictBatch\x12\x1f.learner.v1.PredictBatchRequest\x1a .learner.v1.PredictBatchResponse\x12K\n\nTrainBatch\x12\x1d.learner.v1.TrainBatchRequest\x1a\x1e.learner.v1.TrainBatchResponse\x12N\n\x0bHealthCheck\x12\x1e.learner.v1.HealthCheckRequest\x1a\x1f.learner.v1.HealthCheckResponseBOZMgithub.com/duongess/khoai-robot-control-framework/gen/go/learner/v1;learnerv1b\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x18learner/v1/learner.proto\x12\nlearner.v1\x1a\x1clearner/v1/environment.proto\x1a\x1blearner/v1/transition.proto\"\x88\x01\n\x13PredictBatchRequest\x12\x36\n\x0b\x65nvironment\x18\x01 \x01(\x0b\x32!.learner.v1.EnvironmentDescriptor\x12!\n\x06states\x18\x02 \x03(\x0b\x32\x11.learner.v1.State\x12\x16\n\x0epolicy_version\x18\x03 \x01(\x04\"S\n\x14PredictBatchResponse\x12#\n\x07\x61\x63tions\x18\x01 \x03(\x0b\x32\x12.learner.v1.Action\x12\x16\n\x0epolicy_version\x18\x02 \x01(\x04\"W\n\x11TrainBatchRequest\x12*\n\x05\x62\x61tch\x18\x01 \x01(\x0b\x32\x1b.learner.v1.TransitionBatch\x12\x16\n\x0epolicy_version\x18\x02 \x01(\x04\"\xd5\x02\n\x12TrainBatchResponse\x12\x10\n\x08\x61\x63\x63\x65pted\x18\x01 \x01(\x08\x12\x14\n\x0csamples_seen\x18\x02 \x01(\x04\x12\x16\n\x0epolicy_version\x18\x03 \x01(\x04\x12\x12\n\nactor_loss\x18\x04 \x01(\x02\x12\x13\n\x0b\x63ritic_loss\x18\x05 \x01(\x02\x12\x12\n\nalpha_loss\x18\x06 \x01(\x02\x12\x0f\n\x07\x65ntropy\x18\x07 \x01(\x02\x12\x15\n\rtraining_step\x18\x08 \x01(\x04\x12\x14\n\x0c\x63ritic_one_q\x18\t \x01(\x02\x12\x14\n\x0c\x63ritic_two_q\x18\n \x01(\x02\x12\r\n\x05\x61lpha\x18\x0b \x01(\x02\x12 \n\x18\x61\x63tor_log_std_horizontal\x18\x0c \x01(\x02\x12\x1e\n\x16\x61\x63tor_log_std_vertical\x18\r \x01(\x02\x12\x1d\n\x15\x61\x63tor_log_std_gripper\x18\x0e \x01(\x02\"\x14\n\x12HealthCheckRequest\"c\n\x13HealthCheckResponse\x12\r\n\x05ready\x18\x01 \x01(\x08\x12\x16\n\x0epolicy_version\x18\x02 \x01(\x04\x12\x15\n\rtraining_step\x18\x03 \x01(\x04\x12\x0e\n\x06\x64\x65vice\x18\x04 \x01(\t2\x80\x02\n\x0eLearnerService\x12Q\n\x0cPredictBatch\x12\x1f.learner.v1.PredictBatchRequest\x1a .learner.v1.PredictBatchResponse\x12K\n\nTrainBatch\x12\x1d.learner.v1.TrainBatchRequest\x1a\x1e.learner.v1.TrainBatchResponse\x12N\n\x0bHealthCheck\x12\x1e.learner.v1.HealthCheckRequest\x1a\x1f.learner.v1.HealthCheckResponseBOZMgithub.com/duongess/khoai-robot-control-framework/gen/go/learner/v1;learnerv1b\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -41,11 +41,11 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['_TRAINBATCHREQUEST']._serialized_start=323
   _globals['_TRAINBATCHREQUEST']._serialized_end=410
   _globals['_TRAINBATCHRESPONSE']._serialized_start=413
-  _globals['_TRAINBATCHRESPONSE']._serialized_end=598
-  _globals['_HEALTHCHECKREQUEST']._serialized_start=600
-  _globals['_HEALTHCHECKREQUEST']._serialized_end=620
-  _globals['_HEALTHCHECKRESPONSE']._serialized_start=622
-  _globals['_HEALTHCHECKRESPONSE']._serialized_end=721
-  _globals['_LEARNERSERVICE']._serialized_start=724
-  _globals['_LEARNERSERVICE']._serialized_end=980
+  _globals['_TRAINBATCHRESPONSE']._serialized_end=754
+  _globals['_HEALTHCHECKREQUEST']._serialized_start=756
+  _globals['_HEALTHCHECKREQUEST']._serialized_end=776
+  _globals['_HEALTHCHECKRESPONSE']._serialized_start=778
+  _globals['_HEALTHCHECKRESPONSE']._serialized_end=877
+  _globals['_LEARNERSERVICE']._serialized_start=880
+  _globals['_LEARNERSERVICE']._serialized_end=1136
 # @@protoc_insertion_point(module_scope)

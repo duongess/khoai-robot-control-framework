@@ -81,12 +81,22 @@ class SACAgent:
         self._step_optimizer(self.alpha_optimizer, alpha_loss)
         self._soft_update_targets()
 
+        with torch.no_grad():
+            _, current_log_std = self.actor(states)
+            critic_one_q = self.critic_one(states, actions).mean()
+            critic_two_q = self.critic_two(states, actions).mean()
         return {
             "actor_loss": float(actor_loss.detach()),
             "alpha_loss": float(alpha_loss.detach()),
             "entropy": float((-log_probability).mean().detach()),
             "critic_one_loss": float(critic_one_loss.detach()),
             "critic_two_loss": float(critic_two_loss.detach()),
+            "critic_one_q": float(critic_one_q),
+            "critic_two_q": float(critic_two_q),
+            "alpha": float(self.alpha.detach()),
+            "actor_log_std_horizontal": float(current_log_std[:, 0].mean()),
+            "actor_log_std_vertical": float(current_log_std[:, 1].mean()) if self.config.action_dim > 1 else 0.0,
+            "actor_log_std_gripper": float(current_log_std[:, 2].mean()) if self.config.action_dim > 2 else 0.0,
         }
 
     @property
@@ -96,7 +106,7 @@ class SACAgent:
     @staticmethod
     def _build_actor(config: SACConfig) -> nn.Module:
         if config.controller_type == "mlp":
-            return GaussianActor(config.state_dim, config.action_dim, config.hidden_dim)
+            return GaussianActor(config.state_dim, config.action_dim, config.hidden_dim, config.min_log_std)
         graph = ConnectomeGraph.load(config.graph_path or "")
         arguments = dict(
             observation_dim=config.state_dim,
@@ -107,6 +117,7 @@ class SACAgent:
             train_edge_gains=config.train_edge_gains,
             activation=config.activation,
             action_dead_zone=config.action_dead_zone,
+            min_log_std=config.min_log_std,
             max_horizontal_speed=config.max_horizontal_speed,
             max_vertical_speed=config.max_vertical_speed,
             max_gripper_command=config.max_gripper_command,

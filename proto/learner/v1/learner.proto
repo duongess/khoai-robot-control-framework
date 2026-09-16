@@ -32,6 +32,12 @@ message TrainBatchResponse {
   float alpha_loss = 6;
   float entropy = 7;
   uint64 training_step = 8;
+  float critic_one_q = 9;
+  float critic_two_q = 10;
+  float alpha = 11;
+  float actor_log_std_horizontal = 12;
+  float actor_log_std_vertical = 13;
+  float actor_log_std_gripper = 14;
 }
 
 message HealthCheckRequest {}

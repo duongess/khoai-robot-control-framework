@@ -25,6 +25,10 @@ type Runtime struct {
 	cancel         context.CancelFunc
 	done           chan struct{}
 	metrics        runtimeMetrics
+	// trainingInFlight prevents a fast environment loop from building an
+	// unbounded queue of expensive learner updates. Prediction remains on the
+	// control path; a later cycle schedules the next update after this one ends.
+	trainingInFlight bool
 	lastError      string
 }
 
