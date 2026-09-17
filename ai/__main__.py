@@ -14,8 +14,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "model_name",
-        nargs="?",
-        help="optional checkpoint name to load (or name a new run); e.g. grasp-v1",
+        help="checkpoint name to load (or name a new run); e.g. grasp-v1",
     )
     arguments = parser.parse_args()
     serve(arguments.model_name)

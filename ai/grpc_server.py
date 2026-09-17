@@ -204,8 +204,7 @@ class LearnerServicer(learner_pb2_grpc.LearnerServiceServicer):
 
     def SaveCheckpoint(self, request, context):
         try:
-            requested_name = request.model_name.strip() or self._model_name
-            model_name = validate_model_name(requested_name)
+            model_name = validate_model_name(self._model_name)
             path = checkpoint_path(self._config.checkpoint_dir, model_name)
             # Follow the same lock ordering as TrainBatch. This creates a
             # consistent state across networks, optimizers and policy version.

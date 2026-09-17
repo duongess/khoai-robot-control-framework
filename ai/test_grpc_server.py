@@ -7,7 +7,7 @@ import torch
 from ai.config import LearnerConfig
 from ai.checkpoints import validate_model_name
 from ai.grpc_server import LearnerServicer
-from learner.v1 import environment_pb2, learner_pb2, transition_pb2
+from gen.python.learner.v1 import environment_pb2, learner_pb2, transition_pb2
 
 
 class AbortContext:
