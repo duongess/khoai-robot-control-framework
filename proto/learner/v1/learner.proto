@@ -56,7 +56,6 @@ message HealthCheckResponse {
 // that case the active name is overwritten. Model names are identifiers, not
 // file paths, so a local dashboard cannot write outside the checkpoint root.
 message SaveCheckpointRequest {
-  string model_name = 1;
 }
 
 message SaveCheckpointResponse {

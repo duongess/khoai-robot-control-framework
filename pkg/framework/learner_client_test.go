@@ -39,7 +39,7 @@ func (s *learnerServiceStub) TrainBatch(_ context.Context, request *learnerv1.Tr
 
 func (s *learnerServiceStub) SaveCheckpoint(_ context.Context, request *learnerv1.SaveCheckpointRequest) (*learnerv1.SaveCheckpointResponse, error) {
 	s.saveRequest = request
-	return &learnerv1.SaveCheckpointResponse{ModelName: request.GetModelName(), PolicyVersion: 11, TrainingStep: 23}, nil
+	return &learnerv1.SaveCheckpointResponse{PolicyVersion: 11, TrainingStep: 23}, nil
 }
 
 func TestLearnerClientHealthCheck(t *testing.T) {
@@ -95,14 +95,11 @@ func TestLearnerClientTrainBatchMapsTransition(t *testing.T) {
 }
 
 func TestLearnerClientSavesNamedCheckpoint(t *testing.T) {
-	client, service := newTestLearnerClient(t)
+	client, _ := newTestLearnerClient(t)
 
-	result, err := client.SaveCheckpoint(context.Background(), "grasp-v1")
+	result, err := client.SaveCheckpoint(context.Background())
 	if err != nil {
 		t.Fatalf("SaveCheckpoint() error = %v", err)
-	}
-	if service.saveRequest.GetModelName() != "grasp-v1" {
-		t.Fatalf("SaveCheckpoint() request = %#v", service.saveRequest)
 	}
 	if result.ModelName != "grasp-v1" || result.PolicyVersion != 11 || result.TrainingStep != 23 {
 		t.Fatalf("SaveCheckpoint() result = %#v", result)

@@ -552,7 +552,7 @@ func (r *Runtime) Reset() error {
 
 // SaveCheckpoint asks the configured learner to durably save its complete
 // training state. It does not reset active episodes or the Go replay buffer.
-func (r *Runtime) SaveCheckpoint(ctx context.Context, modelName string) (CheckpointResult, error) {
+func (r *Runtime) SaveCheckpoint(ctx context.Context) (CheckpointResult, error) {
 	if r == nil {
 		return CheckpointResult{}, errors.New("runtime is nil")
 	}
@@ -566,7 +566,7 @@ func (r *Runtime) SaveCheckpoint(ctx context.Context, modelName string) (Checkpo
 	if !ok {
 		return CheckpointResult{}, errors.New("configured learner does not support model checkpoints")
 	}
-	return checkpointing.SaveCheckpoint(ctx, modelName)
+	return checkpointing.SaveCheckpoint(ctx)
 }
 
 // ApproveCurriculumReview advances one reviewable worker to its next

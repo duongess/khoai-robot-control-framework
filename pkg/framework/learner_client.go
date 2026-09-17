@@ -28,7 +28,7 @@ type Learner interface {
 // CheckpointingLearner is intentionally optional so existing task learners
 // remain source-compatible. The local gRPC SAC learner implements it.
 type CheckpointingLearner interface {
-	SaveCheckpoint(context.Context, string) (CheckpointResult, error)
+	SaveCheckpoint(context.Context) (CheckpointResult, error)
 }
 
 type HealthStatus struct {
@@ -176,13 +176,13 @@ func (c *LearnerClient) TrainBatch(ctx context.Context, transitions []Transition
 
 // SaveCheckpoint persists the complete SAC state under modelName. An empty
 // name means "overwrite the learner's active named model".
-func (c *LearnerClient) SaveCheckpoint(ctx context.Context, modelName string) (CheckpointResult, error) {
+func (c *LearnerClient) SaveCheckpoint(ctx context.Context) (CheckpointResult, error) {
 	callContext, cancel, err := c.requestContext(ctx)
 	if err != nil {
 		return CheckpointResult{}, err
 	}
 	defer cancel()
-	response, err := c.client.SaveCheckpoint(callContext, &learnerv1.SaveCheckpointRequest{ModelName: modelName})
+	response, err := c.client.SaveCheckpoint(callContext, &learnerv1.SaveCheckpointRequest{})
 	if err != nil {
 		return CheckpointResult{}, fmt.Errorf("save checkpoint: %w", err)
 	}

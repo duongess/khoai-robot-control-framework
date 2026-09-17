@@ -452,7 +452,6 @@ func (x *HealthCheckResponse) GetModelName() string {
 // file paths, so a local dashboard cannot write outside the checkpoint root.
 type SaveCheckpointRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	ModelName     string                 `protobuf:"bytes,1,opt,name=model_name,json=modelName,proto3" json:"model_name,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -485,13 +484,6 @@ func (x *SaveCheckpointRequest) ProtoReflect() protoreflect.Message {
 // Deprecated: Use SaveCheckpointRequest.ProtoReflect.Descriptor instead.
 func (*SaveCheckpointRequest) Descriptor() ([]byte, []int) {
 	return file_learner_v1_learner_proto_rawDescGZIP(), []int{6}
-}
-
-func (x *SaveCheckpointRequest) GetModelName() string {
-	if x != nil {
-		return x.ModelName
-	}
-	return ""
 }
 
 type SaveCheckpointResponse struct {
@@ -598,10 +590,8 @@ const file_learner_v1_learner_proto_rawDesc = "" +
 	"\rtraining_step\x18\x03 \x01(\x04R\ftrainingStep\x12\x16\n" +
 	"\x06device\x18\x04 \x01(\tR\x06device\x12\x1d\n" +
 	"\n" +
-	"model_name\x18\x05 \x01(\tR\tmodelName\"6\n" +
-	"\x15SaveCheckpointRequest\x12\x1d\n" +
-	"\n" +
-	"model_name\x18\x01 \x01(\tR\tmodelName\"\x83\x01\n" +
+	"model_name\x18\x05 \x01(\tR\tmodelName\"\x17\n" +
+	"\x15SaveCheckpointRequest\"\x83\x01\n" +
 	"\x16SaveCheckpointResponse\x12\x1d\n" +
 	"\n" +
 	"model_name\x18\x01 \x01(\tR\tmodelName\x12%\n" +

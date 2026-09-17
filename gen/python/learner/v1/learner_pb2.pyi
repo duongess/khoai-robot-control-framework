@@ -85,10 +85,8 @@ class HealthCheckResponse(_message.Message):
     def __init__(self, ready: _Optional[bool] = ..., policy_version: _Optional[int] = ..., training_step: _Optional[int] = ..., device: _Optional[str] = ..., model_name: _Optional[str] = ...) -> None: ...
 
 class SaveCheckpointRequest(_message.Message):
-    __slots__ = ("model_name",)
-    MODEL_NAME_FIELD_NUMBER: _ClassVar[int]
-    model_name: str
-    def __init__(self, model_name: _Optional[str] = ...) -> None: ...
+    __slots__ = ()
+    def __init__(self) -> None: ...
 
 class SaveCheckpointResponse(_message.Message):
     __slots__ = ("model_name", "policy_version", "training_step")

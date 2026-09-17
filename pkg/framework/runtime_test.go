@@ -160,7 +160,7 @@ func TestRuntimeDelegatesCheckpointWithoutResettingWorkers(t *testing.T) {
 	runtime := NewRuntime()
 	runtime.learner = learner
 
-	result, err := runtime.SaveCheckpoint(context.Background(), "grasp-v1")
+	result, err := runtime.SaveCheckpoint(context.Background())
 	if err != nil {
 		t.Fatalf("SaveCheckpoint() error = %v", err)
 	}
