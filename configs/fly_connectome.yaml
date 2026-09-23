@@ -5,6 +5,13 @@ controller:
   propagation_steps: 4
   train_edge_gains: true
   freeze_topology: true
+  # A common sparse connectome core with learned, phase-conditioned decoder
+  # heads.  Force-control emits ObjectAttached at index 15 and Phase at 19.
+  phase_gated_decoder: true
+  object_attached_observation_index: 15
+  phase_observation_index: 19
+  # PhaseLift is -1/9 and PhaseMoveToTarget is +1/9 after normalization.
+  transport_phase_threshold: 0.0
   activation: tanh
   action_dead_zone: 0.001
   max_horizontal_speed: 0.2

@@ -91,6 +91,36 @@ def test_six_channel_antagonistic_decoder_dead_zone_and_bounds(tmp_path) -> None
     assert torch.all(action.abs() <= torch.tensor([0.2, 0.3, 1.0]))
 
 
+def test_phase_gated_decoder_uses_transport_head_only_after_attachment(tmp_path) -> None:
+    """The graph state is shared; the selected decoder changes by task state."""
+    policy = FlyConnectomePolicy(
+        23,
+        3,
+        _graph(tmp_path),
+        hidden_dim=8,
+        phase_gated_decoder=True,
+        object_attached_observation_index=15,
+        phase_observation_index=19,
+        transport_phase_threshold=0.0,
+    )
+    with torch.no_grad():
+        policy.motor_gain.fill_(1.0)
+        policy.motor_bias.zero_()
+        policy.transport_motor_gain.fill_(1.0)
+        policy.transport_motor_bias.copy_(torch.tensor([-1.0, 1.0, 0.0, 0.0, 0.0, 0.0]))
+    channels = torch.zeros((2, 6))
+    observations = torch.zeros((2, 23))
+    observations[0, 15] = -1.0  # detached: acquisition decoder
+    observations[0, 19] = -1.0
+    observations[1, 15] = 1.0   # attached and MoveToTarget: transport decoder
+    observations[1, 19] = 0.0
+
+    selected = policy._apply_motor_decoder_heads(channels, observations)
+    actions = policy.decode_motor_channels(selected)
+    assert torch.allclose(actions[0], torch.zeros(3))
+    assert actions[1, 0] > 0
+
+
 def test_graph_actor_trains_one_sac_step_without_neuprint(tmp_path) -> None:
     graph = _graph(tmp_path)
     agent = SACAgent(SACConfig(state_dim=3, action_dim=3, hidden_dim=8, controller_type="fly_connectome", graph_path=str(tmp_path / "connectome_graph.npz"), seed=3))
@@ -109,3 +139,40 @@ def test_random_graph_preserves_node_and_edge_counts(tmp_path) -> None:
     assert random_graph.edge_count == graph.edge_count
     assert np.array_equal(np.bincount(random_graph.edge_index[0], minlength=8), np.bincount(graph.edge_index[0], minlength=8))
     assert np.array_equal(np.bincount(random_graph.edge_index[1], minlength=8), np.bincount(graph.edge_index[1], minlength=8))
+
+
+def test_connectome_decoder_only_training_unlocks_after_stability_window(tmp_path) -> None:
+    graph = _graph(tmp_path)
+    config = SACConfig(
+        state_dim=3,
+        action_dim=3,
+        hidden_dim=8,
+        controller_type="fly_connectome",
+        graph_path=str(tmp_path / "connectome_graph.npz"),
+        seed=7,
+        train_edge_gains=False,
+        freeze_topology=True,
+        full_actor_unlock_step=32,
+        phase_gated_decoder=True,
+        object_attached_observation_index=1,
+        phase_observation_index=2,
+    )
+    agent = SACAgent(config)
+    agent.training_step = 0
+    agent._configure_actor_trainability()
+    assert not agent.actor.neuron_bias.requires_grad
+    assert not agent.actor.leak_logit.requires_grad
+    assert not agent.actor.edge_log_gains.requires_grad
+    assert agent.actor.sensory_encoder[0].weight.requires_grad
+    assert agent.actor.motor_gain.requires_grad
+    assert agent.actor.motor_bias.requires_grad
+    assert agent.actor.transport_motor_gain.requires_grad
+    assert agent.actor.transport_motor_bias.requires_grad
+    assert agent.actor.log_std.requires_grad
+
+    agent.training_step = 64
+    agent._configure_actor_trainability()
+    assert agent.actor.neuron_bias.requires_grad
+    assert agent.actor.leak_logit.requires_grad
+    assert agent.actor.edge_log_gains.requires_grad
+    assert agent.actor.sensory_encoder[0].weight.requires_grad

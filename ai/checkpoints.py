@@ -12,7 +12,10 @@ from typing import Any
 import torch
 
 
-CHECKPOINT_FORMAT_VERSION = 1
+# Version 2 adds phase-gated graph-decoder configuration. Refuse version-1
+# artifacts instead of silently resuming an old actor/replay experiment with
+# incompatible behaviour semantics.
+CHECKPOINT_FORMAT_VERSION = 2
 _MODEL_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
 
 

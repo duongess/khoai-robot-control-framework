@@ -85,6 +85,11 @@ class LearnerServicer(learner_pb2_grpc.LearnerServiceServicer):
             propagation_steps=self._config.propagation_steps,
             train_edge_gains=self._config.train_edge_gains,
             freeze_topology=self._config.freeze_topology,
+            full_actor_unlock_step=self._config.full_actor_unlock_step,
+            phase_gated_decoder=self._config.phase_gated_decoder,
+            object_attached_observation_index=self._config.object_attached_observation_index,
+            phase_observation_index=self._config.phase_observation_index,
+            transport_phase_threshold=self._config.transport_phase_threshold,
             activation=self._config.activation,
             action_dead_zone=self._config.action_dead_zone,
             min_log_std=self._config.min_log_std,
@@ -240,6 +245,11 @@ class LearnerServicer(learner_pb2_grpc.LearnerServiceServicer):
             self._samples_seen = self._checkpoint_counter(payload, "samples_seen")
             self._policy_version = self._checkpoint_counter(payload, "policy_version", minimum=1)
             self._training_step = self._checkpoint_counter(payload, "training_step")
+            # The staged actor schedule belongs to the learner counter, which
+            # is stored outside SAC's tensor state. Restore it explicitly so a
+            # resumed model is not accidentally re-frozen for 128 updates.
+            self._agent.training_step = self._training_step
+            self._agent._configure_actor_trainability()
         except (KeyError, TypeError, ValueError) as error:
             raise ValueError(f"could not restore checkpoint {checkpoint.name}: {error}") from error
         # Episode snapshots intentionally do not survive a process restart.

@@ -44,6 +44,10 @@ class FlyConnectomePolicy(nn.Module):
         max_horizontal_speed: float = 1.0,
         max_vertical_speed: float = 1.0,
         max_gripper_command: float = 1.0,
+        phase_gated_decoder: bool = False,
+        object_attached_observation_index: int = -1,
+        phase_observation_index: int = -1,
+        transport_phase_threshold: float = 0.0,
     ) -> None:
         super().__init__()
         if observation_dim <= 0 or action_dim <= 0 or hidden_dim <= 0 or propagation_steps <= 0:
@@ -54,6 +58,14 @@ class FlyConnectomePolicy(nn.Module):
             raise ValueError("action_dead_zone must be in [0, 1)")
         if min(max_horizontal_speed, max_vertical_speed, max_gripper_command) <= 0:
             raise ValueError("action limits must be positive")
+        if phase_gated_decoder:
+            phase_indices = (object_attached_observation_index, phase_observation_index)
+            if any(index < 0 or index >= observation_dim for index in phase_indices):
+                raise ValueError("phase-gated decoder observation indices must be within observation_dim")
+            if object_attached_observation_index == phase_observation_index:
+                raise ValueError("phase-gated decoder observation indices must be distinct")
+            if not torch.isfinite(torch.tensor(transport_phase_threshold)):
+                raise ValueError("transport_phase_threshold must be finite")
         missing = [name for name in MOTOR_CHANNELS if name not in graph.motor_groups]
         if missing:
             raise GraphArtifactError(f"graph is missing required motor groups: {', '.join(missing)}")
@@ -70,6 +82,10 @@ class FlyConnectomePolicy(nn.Module):
         self.propagation_steps = propagation_steps
         self.action_dead_zone = action_dead_zone
         self.min_log_std = min_log_std
+        self.phase_gated_decoder = phase_gated_decoder
+        self.object_attached_observation_index = object_attached_observation_index
+        self.phase_observation_index = phase_observation_index
+        self.transport_phase_threshold = transport_phase_threshold
         self.register_buffer("adjacency", graph.torch_adjacency())
         self.register_buffer("base_edge_weights", torch.tensor(graph.weights, dtype=torch.float32))
         self.register_buffer("edge_indices", torch.tensor(graph.edge_index[[1, 0]], dtype=torch.long))
@@ -80,6 +96,12 @@ class FlyConnectomePolicy(nn.Module):
         self.edge_log_gains = nn.Parameter(torch.zeros(graph.edge_count), requires_grad=train_edge_gains)
         self.motor_gain = nn.Parameter(torch.ones(len(MOTOR_CHANNELS)))
         self.motor_bias = nn.Parameter(torch.zeros(len(MOTOR_CHANNELS)))
+        # The sparse neural core remains shared.  Only this engineered output
+        # adapter changes once an object is attached and the task reaches
+        # MoveToTarget (the force-control observation encodes that phase as 0).
+        if phase_gated_decoder:
+            self.transport_motor_gain = nn.Parameter(torch.ones(len(MOTOR_CHANNELS)))
+            self.transport_motor_bias = nn.Parameter(torch.zeros(len(MOTOR_CHANNELS)))
         self.log_std = nn.Parameter(torch.full((action_dim,), -1.0))
         self.register_buffer("action_limits", torch.tensor([max_horizontal_speed, max_vertical_speed, max_gripper_command], dtype=torch.float32))
         self.activation = torch.tanh if activation == "tanh" else (lambda value: torch.clamp(value, -1.0, 1.0))
@@ -109,13 +131,32 @@ class FlyConnectomePolicy(nn.Module):
                 raise RuntimeError("non-finite connectome state; inspect graph weights and training settings")
             state = torch.clamp(state, -1.0, 1.0)
         channels = torch.stack([state[:, self._motor_group_indices[name]].mean(dim=1) for name in MOTOR_CHANNELS], dim=1)
-        channels = torch.tanh(channels * self.motor_gain + self.motor_bias)
+        channels = self._apply_motor_decoder_heads(channels, observation)
         mean = self.decode_motor_channels(channels)
         if self.action_dim > 3:
             mean = torch.cat((mean, mean.new_zeros((batch, self.action_dim - 3))), dim=1)
         elif self.action_dim < 3:
             mean = mean[:, : self.action_dim]
         return mean, self.log_std.clamp(self.min_log_std, 2).expand_as(mean)
+
+    def _apply_motor_decoder_heads(self, channels: torch.Tensor, observation: torch.Tensor) -> torch.Tensor:
+        """Select a learned motor readout without blending contradictory actions.
+
+        Before a secure attachment, and through lifting, the acquisition head is
+        used.  Once the object is attached and the phase feature has reached
+        the configured transport threshold, a separately trainable transport
+        head drives the *same* sparse connectome state.  The task's phase is an
+        observation, so SAC can still learn both behaviours end to end.
+        """
+        approach_channels = torch.tanh(channels * self.motor_gain + self.motor_bias)
+        if not self.phase_gated_decoder:
+            return approach_channels
+        transport_channels = torch.tanh(channels * self.transport_motor_gain + self.transport_motor_bias)
+        transport_mask = (
+            (observation[:, self.object_attached_observation_index] > 0)
+            & (observation[:, self.phase_observation_index] >= self.transport_phase_threshold)
+        )
+        return torch.where(transport_mask.unsqueeze(1), transport_channels, approach_channels)
 
     def sample(self, observation: torch.Tensor, deterministic: bool = False) -> tuple[torch.Tensor, torch.Tensor]:
         mean, log_std = self(observation)

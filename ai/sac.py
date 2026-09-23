@@ -32,12 +32,14 @@ class SACAgent:
         torch.manual_seed(config.seed)
 
         self.actor = self._build_actor(config).to(self.device)
+        self.training_step = 0
         self.critic_one = Critic(config.state_dim, config.action_dim, config.hidden_dim).to(self.device)
         self.critic_two = Critic(config.state_dim, config.action_dim, config.hidden_dim).to(self.device)
         self.target_critic_one = deepcopy(self.critic_one).to(self.device)
         self.target_critic_two = deepcopy(self.critic_two).to(self.device)
 
         self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=config.learning_rate)
+        self._configure_actor_trainability()
         self.critic_one_optimizer = torch.optim.Adam(self.critic_one.parameters(), lr=config.learning_rate)
         self.critic_two_optimizer = torch.optim.Adam(self.critic_two.parameters(), lr=config.learning_rate)
         self.log_alpha = nn.Parameter(torch.zeros(1, device=self.device))
@@ -80,6 +82,8 @@ class SACAgent:
 
         alpha_loss = -(self.log_alpha * (log_probability + self.config.target_entropy).detach()).mean()
         self._step_optimizer(self.alpha_optimizer, alpha_loss)
+        self.training_step += 1
+        self._configure_actor_trainability()
         self._soft_update_targets()
 
         with torch.no_grad():
@@ -103,6 +107,38 @@ class SACAgent:
     @property
     def alpha(self) -> torch.Tensor:
         return self.log_alpha.exp()
+
+    def _configure_actor_trainability(self) -> None:
+        if self.config.controller_type != "fly_connectome":
+            return
+        unlocked = self.config.full_actor_unlock_step <= 0 or self.training_step >= self.config.full_actor_unlock_step
+        for parameter in self.actor.parameters():
+            parameter.requires_grad = unlocked
+
+        if not unlocked:
+            # Keep the topology and the motion backbone fixed while the policy
+            # learns only a decoder/residual head. This preserves the connectome
+            # priors while letting the SAC policy discover a safe low-level action
+            # readout before the full actor is unfrozen.
+            if hasattr(self.actor, "neuron_bias"):
+                self.actor.neuron_bias.requires_grad = False
+            if hasattr(self.actor, "leak_logit"):
+                self.actor.leak_logit.requires_grad = False
+            if hasattr(self.actor, "edge_log_gains"):
+                self.actor.edge_log_gains.requires_grad = False
+            if hasattr(self.actor, "sensory_encoder"):
+                for parameter in self.actor.sensory_encoder.parameters():
+                    parameter.requires_grad = True
+            if hasattr(self.actor, "motor_gain"):
+                self.actor.motor_gain.requires_grad = True
+            if hasattr(self.actor, "motor_bias"):
+                self.actor.motor_bias.requires_grad = True
+            if hasattr(self.actor, "transport_motor_gain"):
+                self.actor.transport_motor_gain.requires_grad = True
+            if hasattr(self.actor, "transport_motor_bias"):
+                self.actor.transport_motor_bias.requires_grad = True
+            if hasattr(self.actor, "log_std"):
+                self.actor.log_std.requires_grad = True
 
     def checkpoint_state(self) -> dict[str, Any]:
         """Return every trainable SAC component needed for an exact resume."""
@@ -169,6 +205,10 @@ class SACAgent:
             max_horizontal_speed=config.max_horizontal_speed,
             max_vertical_speed=config.max_vertical_speed,
             max_gripper_command=config.max_gripper_command,
+            phase_gated_decoder=config.phase_gated_decoder,
+            object_attached_observation_index=config.object_attached_observation_index,
+            phase_observation_index=config.phase_observation_index,
+            transport_phase_threshold=config.transport_phase_threshold,
         )
         if config.controller_type == "random_graph":
             return RandomGraphPolicy(**arguments, seed=config.seed)

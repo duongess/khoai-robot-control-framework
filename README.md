@@ -53,6 +53,10 @@ LEARNER_CONTROLLER=mlp poetry run python -m ai
 LEARNER_CONTROLLER=fly_connectome \
 LEARNER_GRAPH_PATH=data/connectome/connectome_graph.npz \
 LEARNER_PROPAGATION_STEPS=4 LEARNER_TRAIN_EDGE_GAINS=true \
+LEARNER_PHASE_GATED_DECODER=true \
+LEARNER_OBJECT_ATTACHED_OBSERVATION_INDEX=15 \
+LEARNER_PHASE_OBSERVATION_INDEX=19 \
+LEARNER_TRANSPORT_PHASE_THRESHOLD=0.0 \
 LEARNER_ACTION_DEAD_ZONE=0.001 LEARNER_MAX_HORIZONTAL_SPEED=0.2 \
 LEARNER_MAX_VERTICAL_SPEED=0.2 poetry run python -m ai
 
@@ -119,6 +123,14 @@ gripper    = hind_left - hind_right
 ```
 
 The decoder uses tanh, a configurable dead zone, output normalization, and configured speed/command limits. In an arm task, the three values correspond to left/right, down/up, and close/open. A discrete task adapter can threshold them into `MOVE_LEFT`, `MOVE_RIGHT`, `MOVE_UP`, `MOVE_DOWN`, `GRIP`, `RELEASE`, or `NO_OP`; the present repository's interface is continuous only.
+
+For the 23-dimensional force-control task, `LEARNER_PHASE_GATED_DECODER=true`
+keeps one sparse graph core but adds two learned motor readouts: an
+acquisition readout until an object is securely attached, and a transport
+readout once the attached-object phase reaches `MoveToTarget`.  Their outputs
+are selected by state; they are never averaged. This configuration changes the
+actor checkpoint schema, so begin a new named model and fresh Go replay buffer
+instead of resuming an older checkpoint.
 
 ## Evaluation protocol
 

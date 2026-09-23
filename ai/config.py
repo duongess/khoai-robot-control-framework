@@ -1,6 +1,7 @@
 """Configuration for the local SAC learner."""
 
 from dataclasses import dataclass
+import math
 import os
 from pathlib import Path
 from dotenv import load_dotenv
@@ -24,6 +25,15 @@ class SACConfig:
     propagation_steps: int = 4
     train_edge_gains: bool = True
     freeze_topology: bool = True
+    full_actor_unlock_step: int = 128
+    # The force-control task has one sparse connectome core, then distinct
+    # learned readouts for acquiring an object and transporting it.  This is a
+    # phase-conditioned decoder, not two independent policies whose actions
+    # would be averaged together.
+    phase_gated_decoder: bool = False
+    object_attached_observation_index: int = -1
+    phase_observation_index: int = -1
+    transport_phase_threshold: float = 0.0
     activation: str = "tanh"
     action_dead_zone: float = 0.001
     # Maintain a modest variance floor during stochastic data collection. This
@@ -48,22 +58,39 @@ class SACConfig:
             raise ValueError(f"connectome graph does not exist: {self.graph_path}")
         if not self.freeze_topology:
             raise ValueError("freeze_topology must remain true; creating graph edges is unsupported")
+        if self.full_actor_unlock_step < 0:
+            raise ValueError("full_actor_unlock_step must be non-negative")
+        if self.phase_gated_decoder:
+            if self.controller_type == "mlp":
+                raise ValueError("phase_gated_decoder requires a graph controller")
+            indices = (self.object_attached_observation_index, self.phase_observation_index)
+            if any(index < 0 or index >= self.state_dim for index in indices):
+                raise ValueError("phase-gated decoder observation indices must be within state_dim")
+            if self.object_attached_observation_index == self.phase_observation_index:
+                raise ValueError("phase-gated decoder observation indices must be distinct")
+            if not math.isfinite(self.transport_phase_threshold):
+                raise ValueError("transport_phase_threshold must be finite")
         if self.min_log_std > 2:
             raise ValueError("min_log_std must not exceed 2")
 
 
 @dataclass(frozen=True)
 class LearnerConfig:
-    # The force-control task emits 23 values. Keep the dataclass default aligned
+    # The force-control task emits 30 values. Keep the dataclass default aligned
     # with from_environment() so an in-process servicer cannot start with a
     # different observation schema than the gRPC process.
-    state_dim: int = 23
+    state_dim: int = 30
     action_dim: int = 3
     controller_type: str = "mlp"
     graph_path: str | None = None
     propagation_steps: int = 4
     train_edge_gains: bool = True
     freeze_topology: bool = True
+    full_actor_unlock_step: int = 128
+    phase_gated_decoder: bool = False
+    object_attached_observation_index: int = -1
+    phase_observation_index: int = -1
+    transport_phase_threshold: float = 0.0
     activation: str = "tanh"
     action_dead_zone: float = 0.001
     min_log_std: float = -3.0
@@ -101,19 +128,38 @@ class LearnerConfig:
             raise ValueError("log_every_n_requests must be positive")
         if not self.checkpoint_dir.strip():
             raise ValueError("checkpoint_dir must not be empty")
+        if self.full_actor_unlock_step < 0:
+            raise ValueError("full_actor_unlock_step must be non-negative")
+        if self.phase_gated_decoder:
+            if self.controller_type == "mlp":
+                raise ValueError("phase_gated_decoder requires a graph controller")
+            indices = (self.object_attached_observation_index, self.phase_observation_index)
+            if any(index < 0 or index >= self.state_dim for index in indices):
+                raise ValueError("phase-gated decoder observation indices must be within state_dim")
+            if self.object_attached_observation_index == self.phase_observation_index:
+                raise ValueError("phase-gated decoder observation indices must be distinct")
+            if not math.isfinite(self.transport_phase_threshold):
+                raise ValueError("transport_phase_threshold must be finite")
 
     @classmethod
     def from_environment(cls) -> "LearnerConfig":
         try:
             graph_path = os.environ.get("LEARNER_GRAPH_PATH")
+            controller_type = os.environ.get("LEARNER_CONTROLLER", "mlp")
+            default_phase_gating = "true" if controller_type in {"fly_connectome", "random_graph"} else "false"
             return cls(
-                state_dim=int(os.environ.get("LEARNER_STATE_DIM", "23")),
+                state_dim=int(os.environ.get("LEARNER_STATE_DIM", "30")),
                 action_dim=int(os.environ.get("LEARNER_ACTION_DIM", "3")),
-                controller_type=os.environ.get("LEARNER_CONTROLLER", "mlp"),
+                controller_type=controller_type,
                 graph_path=graph_path,
                 propagation_steps=int(os.environ.get("LEARNER_PROPAGATION_STEPS", "4")),
                 train_edge_gains=os.environ.get("LEARNER_TRAIN_EDGE_GAINS", "true").lower() == "true",
                 freeze_topology=os.environ.get("LEARNER_FREEZE_TOPOLOGY", "true").lower() == "true",
+                full_actor_unlock_step=int(os.environ.get("LEARNER_FULL_ACTOR_UNLOCK_STEP", "128")),
+                phase_gated_decoder=os.environ.get("LEARNER_PHASE_GATED_DECODER", default_phase_gating).lower() == "true",
+                object_attached_observation_index=int(os.environ.get("LEARNER_OBJECT_ATTACHED_OBSERVATION_INDEX", "15")),
+                phase_observation_index=int(os.environ.get("LEARNER_PHASE_OBSERVATION_INDEX", "19")),
+                transport_phase_threshold=float(os.environ.get("LEARNER_TRANSPORT_PHASE_THRESHOLD", "0.0")),
                 activation=os.environ.get("LEARNER_ACTIVATION", "tanh"),
                 action_dead_zone=float(os.environ.get("LEARNER_ACTION_DEAD_ZONE", "0.001")),
                 min_log_std=float(os.environ.get("LEARNER_MIN_LOG_STD", "-3.0")),
