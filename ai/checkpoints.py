@@ -12,10 +12,10 @@ from typing import Any
 import torch
 
 
-# Version 2 adds phase-gated graph-decoder configuration. Refuse version-1
-# artifacts instead of silently resuming an old actor/replay experiment with
-# incompatible behaviour semantics.
-CHECKPOINT_FORMAT_VERSION = 2
+# Version 3 introduces the shared-latent fly-base + tactile SAC-residual actor.
+# Earlier single-head/phase-decoder weights have different parameter and action
+# semantics, so fail clearly instead of partially loading them.
+CHECKPOINT_FORMAT_VERSION = 3
 _MODEL_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
 
 

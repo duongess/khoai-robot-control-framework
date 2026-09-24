@@ -85,8 +85,12 @@ type PredictBatchResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Actions       []*Action              `protobuf:"bytes,1,rep,name=actions,proto3" json:"actions,omitempty"`
 	PolicyVersion uint64                 `protobuf:"varint,2,opt,name=policy_version,json=policyVersion,proto3" json:"policy_version,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	// Optional decomposition for dual-loop actors. `actions` remains the
+	// three-dimensional command stored in replay and consumed by the critic.
+	FlyBaseActions  []*Action `protobuf:"bytes,3,rep,name=fly_base_actions,json=flyBaseActions,proto3" json:"fly_base_actions,omitempty"`
+	ResidualActions []*Action `protobuf:"bytes,4,rep,name=residual_actions,json=residualActions,proto3" json:"residual_actions,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *PredictBatchResponse) Reset() {
@@ -131,6 +135,20 @@ func (x *PredictBatchResponse) GetPolicyVersion() uint64 {
 		return x.PolicyVersion
 	}
 	return 0
+}
+
+func (x *PredictBatchResponse) GetFlyBaseActions() []*Action {
+	if x != nil {
+		return x.FlyBaseActions
+	}
+	return nil
+}
+
+func (x *PredictBatchResponse) GetResidualActions() []*Action {
+	if x != nil {
+		return x.ResidualActions
+	}
+	return nil
 }
 
 type TrainBatchRequest struct {
@@ -446,10 +464,10 @@ func (x *HealthCheckResponse) GetModelName() string {
 	return ""
 }
 
-// SaveCheckpoint persists the complete SAC training state. `model_name` may
-// be omitted only after a learner was started with `python -m ai <name>`; in
-// that case the active name is overwritten. Model names are identifiers, not
-// file paths, so a local dashboard cannot write outside the checkpoint root.
+// SaveCheckpoint persists the complete SAC training state under the learner's
+// active CLI model name (`python -m ai <name>`), overwriting that name only.
+// Keeping the request empty prevents a dashboard from selecting a filesystem
+// path or silently changing the active model identity.
 type SaveCheckpointRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -555,10 +573,12 @@ const file_learner_v1_learner_proto_rawDesc = "" +
 	"\x13PredictBatchRequest\x12C\n" +
 	"\venvironment\x18\x01 \x01(\v2!.learner.v1.EnvironmentDescriptorR\venvironment\x12)\n" +
 	"\x06states\x18\x02 \x03(\v2\x11.learner.v1.StateR\x06states\x12%\n" +
-	"\x0epolicy_version\x18\x03 \x01(\x04R\rpolicyVersion\"k\n" +
+	"\x0epolicy_version\x18\x03 \x01(\x04R\rpolicyVersion\"\xe8\x01\n" +
 	"\x14PredictBatchResponse\x12,\n" +
 	"\aactions\x18\x01 \x03(\v2\x12.learner.v1.ActionR\aactions\x12%\n" +
-	"\x0epolicy_version\x18\x02 \x01(\x04R\rpolicyVersion\"m\n" +
+	"\x0epolicy_version\x18\x02 \x01(\x04R\rpolicyVersion\x12<\n" +
+	"\x10fly_base_actions\x18\x03 \x03(\v2\x12.learner.v1.ActionR\x0eflyBaseActions\x12=\n" +
+	"\x10residual_actions\x18\x04 \x03(\v2\x12.learner.v1.ActionR\x0fresidualActions\"m\n" +
 	"\x11TrainBatchRequest\x121\n" +
 	"\x05batch\x18\x01 \x01(\v2\x1b.learner.v1.TransitionBatchR\x05batch\x12%\n" +
 	"\x0epolicy_version\x18\x02 \x01(\x04R\rpolicyVersion\"\x93\x04\n" +
@@ -635,20 +655,22 @@ var file_learner_v1_learner_proto_depIdxs = []int32{
 	8,  // 0: learner.v1.PredictBatchRequest.environment:type_name -> learner.v1.EnvironmentDescriptor
 	9,  // 1: learner.v1.PredictBatchRequest.states:type_name -> learner.v1.State
 	10, // 2: learner.v1.PredictBatchResponse.actions:type_name -> learner.v1.Action
-	11, // 3: learner.v1.TrainBatchRequest.batch:type_name -> learner.v1.TransitionBatch
-	0,  // 4: learner.v1.LearnerService.PredictBatch:input_type -> learner.v1.PredictBatchRequest
-	2,  // 5: learner.v1.LearnerService.TrainBatch:input_type -> learner.v1.TrainBatchRequest
-	4,  // 6: learner.v1.LearnerService.HealthCheck:input_type -> learner.v1.HealthCheckRequest
-	6,  // 7: learner.v1.LearnerService.SaveCheckpoint:input_type -> learner.v1.SaveCheckpointRequest
-	1,  // 8: learner.v1.LearnerService.PredictBatch:output_type -> learner.v1.PredictBatchResponse
-	3,  // 9: learner.v1.LearnerService.TrainBatch:output_type -> learner.v1.TrainBatchResponse
-	5,  // 10: learner.v1.LearnerService.HealthCheck:output_type -> learner.v1.HealthCheckResponse
-	7,  // 11: learner.v1.LearnerService.SaveCheckpoint:output_type -> learner.v1.SaveCheckpointResponse
-	8,  // [8:12] is the sub-list for method output_type
-	4,  // [4:8] is the sub-list for method input_type
-	4,  // [4:4] is the sub-list for extension type_name
-	4,  // [4:4] is the sub-list for extension extendee
-	0,  // [0:4] is the sub-list for field type_name
+	10, // 3: learner.v1.PredictBatchResponse.fly_base_actions:type_name -> learner.v1.Action
+	10, // 4: learner.v1.PredictBatchResponse.residual_actions:type_name -> learner.v1.Action
+	11, // 5: learner.v1.TrainBatchRequest.batch:type_name -> learner.v1.TransitionBatch
+	0,  // 6: learner.v1.LearnerService.PredictBatch:input_type -> learner.v1.PredictBatchRequest
+	2,  // 7: learner.v1.LearnerService.TrainBatch:input_type -> learner.v1.TrainBatchRequest
+	4,  // 8: learner.v1.LearnerService.HealthCheck:input_type -> learner.v1.HealthCheckRequest
+	6,  // 9: learner.v1.LearnerService.SaveCheckpoint:input_type -> learner.v1.SaveCheckpointRequest
+	1,  // 10: learner.v1.LearnerService.PredictBatch:output_type -> learner.v1.PredictBatchResponse
+	3,  // 11: learner.v1.LearnerService.TrainBatch:output_type -> learner.v1.TrainBatchResponse
+	5,  // 12: learner.v1.LearnerService.HealthCheck:output_type -> learner.v1.HealthCheckResponse
+	7,  // 13: learner.v1.LearnerService.SaveCheckpoint:output_type -> learner.v1.SaveCheckpointResponse
+	10, // [10:14] is the sub-list for method output_type
+	6,  // [6:10] is the sub-list for method input_type
+	6,  // [6:6] is the sub-list for extension type_name
+	6,  // [6:6] is the sub-list for extension extendee
+	0,  // [0:6] is the sub-list for field type_name
 }
 
 func init() { file_learner_v1_learner_proto_init() }

@@ -38,7 +38,7 @@ class SACAgent:
         self.target_critic_one = deepcopy(self.critic_one).to(self.device)
         self.target_critic_two = deepcopy(self.critic_two).to(self.device)
 
-        self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=config.learning_rate)
+        self.actor_optimizer = self._build_actor_optimizer()
         self._configure_actor_trainability()
         self.critic_one_optimizer = torch.optim.Adam(self.critic_one.parameters(), lr=config.learning_rate)
         self.critic_two_optimizer = torch.optim.Adam(self.critic_two.parameters(), lr=config.learning_rate)
@@ -55,6 +55,24 @@ class SACAgent:
         with torch.no_grad():
             actions, _ = actor.sample(states.to(self.device), deterministic=deterministic)
         return actions.cpu()
+
+    def act_with_actor_components(
+        self,
+        actor: nn.Module,
+        states: torch.Tensor,
+        deterministic: bool = True,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Evaluate final, fly-base, and SAC-residual actions from one snapshot."""
+        self._validate_states(states)
+        with torch.no_grad():
+            device_states = states.to(self.device)
+            if hasattr(actor, "sample_decomposed"):
+                final, fly_base, residual, _ = actor.sample_decomposed(device_states, deterministic=deterministic)
+            else:
+                final, _ = actor.sample(device_states, deterministic=deterministic)
+                fly_base = torch.zeros_like(final)
+                residual = final
+        return final.cpu(), fly_base.cpu(), residual.cpu()
 
     def update(self, batch: TensorBatch) -> dict[str, float]:
         states, actions, rewards, next_states, dones = self._prepare_batch(batch)
@@ -108,6 +126,17 @@ class SACAgent:
     def alpha(self) -> torch.Tensor:
         return self.log_alpha.exp()
 
+    def _build_actor_optimizer(self) -> torch.optim.Optimizer:
+        if self.config.controller_type not in {"fly_connectome", "random_graph"}:
+            return torch.optim.Adam(self.actor.parameters(), lr=self.config.learning_rate)
+        residual_parameters = list(self.actor.residual_head.parameters()) + [self.actor.log_std]
+        residual_ids = {id(parameter) for parameter in residual_parameters}
+        base_parameters = [parameter for parameter in self.actor.parameters() if id(parameter) not in residual_ids]
+        return torch.optim.Adam([
+            {"name": "fly_base", "params": base_parameters, "lr": self.config.learning_rate},
+            {"name": "sac_residual", "params": residual_parameters, "lr": self.config.learning_rate},
+        ])
+
     def _configure_actor_trainability(self) -> None:
         if self.config.controller_type != "fly_connectome":
             return
@@ -129,6 +158,15 @@ class SACAgent:
             if hasattr(self.actor, "sensory_encoder"):
                 for parameter in self.actor.sensory_encoder.parameters():
                     parameter.requires_grad = True
+            if hasattr(self.actor, "latent_projection"):
+                for parameter in self.actor.latent_projection.parameters():
+                    parameter.requires_grad = True
+            if hasattr(self.actor, "base_head"):
+                for parameter in self.actor.base_head.parameters():
+                    parameter.requires_grad = True
+            if hasattr(self.actor, "residual_head"):
+                for parameter in self.actor.residual_head.parameters():
+                    parameter.requires_grad = True
             if hasattr(self.actor, "motor_gain"):
                 self.actor.motor_gain.requires_grad = True
             if hasattr(self.actor, "motor_bias"):
@@ -139,6 +177,16 @@ class SACAgent:
                 self.actor.transport_motor_bias.requires_grad = True
             if hasattr(self.actor, "log_std"):
                 self.actor.log_std.requires_grad = True
+
+        base_warmup = self.training_step < self.config.base_warmup_steps
+        for group in self.actor_optimizer.param_groups:
+            if group.get("name") == "fly_base":
+                group["lr"] = self.config.learning_rate if base_warmup else self.config.learning_rate * self.config.base_learning_rate_multiplier
+        if hasattr(self.actor, "residual_head"):
+            for parameter in self.actor.residual_head.parameters():
+                parameter.requires_grad = not base_warmup
+        if hasattr(self.actor, "log_std"):
+            self.actor.log_std.requires_grad = not base_warmup
 
     def checkpoint_state(self) -> dict[str, Any]:
         """Return every trainable SAC component needed for an exact resume."""
@@ -209,6 +257,14 @@ class SACAgent:
             object_attached_observation_index=config.object_attached_observation_index,
             phase_observation_index=config.phase_observation_index,
             transport_phase_threshold=config.transport_phase_threshold,
+            residual_alpha=(config.residual_alpha_x, config.residual_alpha_y, config.residual_alpha_grip),
+            # Warmup scheduling is owned by SAC; the actor only owns inference.
+            tactile_observation_indices=(
+                config.slip_severity_observation_index,
+                config.grip_force_observation_index,
+                config.vertical_acceleration_observation_index,
+                config.previous_vertical_action_observation_index,
+            ),
         )
         if config.controller_type == "random_graph":
             return RandomGraphPolicy(**arguments, seed=config.seed)

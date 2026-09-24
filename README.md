@@ -112,19 +112,43 @@ episode on the restored policy. The Go replay buffer is deliberately not
 checkpointed: it belongs to the short-lived simulator runtime and old
 transitions can be incompatible after an environment or reward change.
 
-The observation mapping is exact but intentionally generic: the task's ordered `State` vector of dimension `LEARNER_STATE_DIM` passes through a trainable `Linear -> tanh -> Linear` sensory encoder, whose outputs are injected only into explicit `input_groups.sensory` body IDs in the cached artifact. This repository has no named arm observation schema, so it cannot truthfully label state index 0 as target position or a joint angle; a downstream task must document its vector ordering.
-
-Required motor groups are `front_left`, `front_right`, `middle_left`, `middle_right`, `hind_left`, and `hind_right`. Their mean graph activities map to continuous actions as:
+The force-control task supplies a 30-value observation. It passes through the
+connectome sensory encoder and sparse graph to one shared latent. A learned
+fly-base head emits the nominal three-axis reflex; a SAC head receives the same
+latent plus normalized slip severity (17), grip force (16), vertical
+acceleration (18), and previous vertical action (26). The learner returns all
+three vectors in one snapshot:
 
 ```text
-horizontal = front_right - front_left
-vertical   = middle_right - middle_left
-gripper    = hind_left - hind_right
+a_final = clamp(a_fly_base + alpha * delta_a_sac, -1, 1)
 ```
 
-The decoder uses tanh, a configurable dead zone, output normalization, and configured speed/command limits. In an arm task, the three values correspond to left/right, down/up, and close/open. A discrete task adapter can threshold them into `MOVE_LEFT`, `MOVE_RIGHT`, `MOVE_UP`, `MOVE_DOWN`, `GRIP`, `RELEASE`, or `NO_OP`; the present repository's interface is continuous only.
+The default normalized alpha is `[0.20, 0.15, 0.30]`. The grip value is kept
+normalized because the Go task owns unit conversion and the material safety
+limit; with its default 12 N/s actuator, `0.30` is approximately `3.6 N/s` of
+residual authority. For the first `LEARNER_BASE_WARMUP_STEPS` gradient updates
+(128 by default), the residual mean head and log standard deviation are frozen
+while its fixed Gaussian noise supplies exploration; SAC therefore teaches the
+fly-base path first. Afterwards the residual head trains at full rate and the
+base/backbone optimizer group drops to `0.1x`. This is a decoupled warmup and
+fine-tuning schedule without a teacher or runtime FSM controller.
 
-For the 23-dimensional force-control task, `LEARNER_PHASE_GATED_DECODER=true`
+This actor uses checkpoint format 3 and force-control schema 33. Start a new
+model name and a fresh Go process/replay buffer; pre-dual-loop checkpoints are
+rejected instead of being partially restored.
+
+Required graph readout groups are `front_left`, `front_right`, `middle_left`,
+`middle_right`, `hind_left`, and `hind_right`. Their six mean activities are
+projected into the shared latent; the learned base/residual heads—not a
+hard-coded antagonist or FSM mapping—produce the production action. The old
+left/right difference decoder remains only as a diagnostic helper in tests.
+
+Both heads use tanh and preserve the existing continuous three-value action
+contract: left/right, down/up, and signed grip-force rate. The Go environment
+does not add a scripted FSM command; it only applies workspace, slew-rate, and
+`F_break - 0.5 N` safety bounds.
+
+For the 30-dimensional force-control task, `LEARNER_PHASE_GATED_DECODER=true`
 keeps one sparse graph core but adds two learned motor readouts: an
 acquisition readout until an object is securely attached, and a transport
 readout once the attached-object phase reaches `MoveToTarget`.  Their outputs

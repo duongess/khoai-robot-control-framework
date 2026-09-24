@@ -16,6 +16,10 @@ message PredictBatchRequest {
 message PredictBatchResponse {
   repeated Action actions = 1;
   uint64 policy_version = 2;
+  // Optional decomposition for dual-loop actors. `actions` remains the
+  // three-dimensional command stored in replay and consumed by the critic.
+  repeated Action fly_base_actions = 3;
+  repeated Action residual_actions = 4;
 }
 
 message TrainBatchRequest {
@@ -51,10 +55,10 @@ message HealthCheckResponse {
   string model_name = 5;
 }
 
-// SaveCheckpoint persists the complete SAC training state. `model_name` may
-// be omitted only after a learner was started with `python -m ai <name>`; in
-// that case the active name is overwritten. Model names are identifiers, not
-// file paths, so a local dashboard cannot write outside the checkpoint root.
+// SaveCheckpoint persists the complete SAC training state under the learner's
+// active CLI model name (`python -m ai <name>`), overwriting that name only.
+// Keeping the request empty prevents a dashboard from selecting a filesystem
+// path or silently changing the active model identity.
 message SaveCheckpointRequest {
 }
 

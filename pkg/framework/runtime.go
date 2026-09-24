@@ -262,8 +262,10 @@ func (r *Runtime) cycle(ctx context.Context, descriptor TaskDescriptor) {
 	r.mu.RUnlock()
 
 	type indexedPrediction struct {
-		action  Action
-		version uint64
+		action   Action
+		flyBase  Action
+		residual Action
+		version  uint64
 	}
 	predictions := make(map[int]indexedPrediction, len(r.workers))
 	if useRandomWarmup {
@@ -306,7 +308,14 @@ func (r *Runtime) cycle(ctx context.Context, descriptor TaskDescriptor) {
 			return
 		}
 		for position, index := range indexes {
-			predictions[index] = indexedPrediction{action: prediction.Actions[position], version: prediction.PolicyVersion}
+			item := indexedPrediction{action: prediction.Actions[position], version: prediction.PolicyVersion}
+			if len(prediction.FlyBaseActions) == len(states) {
+				item.flyBase = prediction.FlyBaseActions[position]
+			}
+			if len(prediction.ResidualActions) == len(states) {
+				item.residual = prediction.ResidualActions[position]
+			}
+			predictions[index] = item
 		}
 	}
 	r.mu.Lock()
@@ -340,7 +349,13 @@ func (r *Runtime) cycle(ctx context.Context, descriptor TaskDescriptor) {
 				return
 			}
 		}
-		result, stepErr := worker.task.Step(action)
+		var result StepResult
+		var stepErr error
+		if decomposedTask, ok := worker.task.(DecomposedActionTask); ok && len(prediction.flyBase) == descriptor.ActionDimension && len(prediction.residual) == descriptor.ActionDimension {
+			result, stepErr = decomposedTask.StepDecomposed(action, prediction.flyBase, prediction.residual)
+		} else {
+			result, stepErr = worker.task.Step(action)
+		}
 		if stepErr != nil {
 			r.lastError = fmt.Sprintf("worker %d step: %v", worker.id, stepErr)
 			r.status = RuntimeError
@@ -351,7 +366,23 @@ func (r *Runtime) cycle(ctx context.Context, descriptor TaskDescriptor) {
 			r.status = RuntimeError
 			return
 		}
-		transition := Transition{Observation: worker.state, Action: action, Reward: result.Reward, NextObservation: result.State, Outcome: result.Outcome, Done: result.Done}
+		appliedAction := action
+		if len(result.AppliedAction) > 0 {
+			if len(result.AppliedAction) != descriptor.ActionDimension {
+				r.lastError = fmt.Sprintf("worker %d applied action dimension %d, want %d", worker.id, len(result.AppliedAction), descriptor.ActionDimension)
+				r.status = RuntimeError
+				return
+			}
+			for component, value := range result.AppliedAction {
+				if math.IsNaN(float64(value)) || math.IsInf(float64(value), 0) || value < descriptor.ActionMin || value > descriptor.ActionMax {
+					r.lastError = fmt.Sprintf("worker %d applied unsafe action[%d]=%v outside [%v, %v]", worker.id, component, value, descriptor.ActionMin, descriptor.ActionMax)
+					r.status = RuntimeError
+					return
+				}
+			}
+			appliedAction = result.AppliedAction
+		}
+		transition := Transition{Observation: worker.state, Action: append(Action(nil), appliedAction...), Reward: result.Reward, NextObservation: result.State, Outcome: result.Outcome, Done: result.Done}
 		r.replay.Add(transition)
 		worker.actionSource = "policy"
 		if useRandomWarmup {

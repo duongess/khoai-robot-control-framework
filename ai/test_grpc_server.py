@@ -42,16 +42,18 @@ def test_prediction_uses_explicit_collection_or_evaluation_mode(deterministic: b
     servicer = LearnerServicer(LearnerConfig(state_dim=3, action_dim=3, deterministic_inference=deterministic))
     called_with: list[bool] = []
 
-    def act_with_actor(_actor, states, *, deterministic: bool):
+    def act_with_actor_components(_actor, states, *, deterministic: bool):
         called_with.append(deterministic)
-        return torch.zeros((len(states), 3))
+        actions = torch.zeros((len(states), 3))
+        return actions, actions, actions
 
-    servicer._agent.act_with_actor = act_with_actor  # type: ignore[method-assign]
-    servicer.PredictBatch(
+    servicer._agent.act_with_actor_components = act_with_actor_components  # type: ignore[method-assign]
+    response = servicer.PredictBatch(
         learner_pb2.PredictBatchRequest(states=[environment_pb2.State(values=[0.0, 0.1, 0.2])]),
         AbortContext(),
     )
     assert called_with == [deterministic]
+    assert len(response.actions) == len(response.fly_base_actions) == len(response.residual_actions) == 1
 
 
 def test_training_increments_policy_version():
@@ -91,7 +93,7 @@ def test_policy_snapshot_cache_is_bounded():
 
 def test_checkpoint_round_trip_restores_complete_sac_training_state(tmp_path: Path):
     config = LearnerConfig(state_dim=3, action_dim=3, checkpoint_dir=str(tmp_path))
-    servicer = LearnerServicer(config)
+    servicer = LearnerServicer(config, model_name="grasp-v1")
     transitions = [transition_pb2.Transition(
         state=environment_pb2.State(values=[0.0, 0.1, 0.2]),
         action=environment_pb2.Action(values=[0.0, 0.0, 0.0]),
@@ -101,7 +103,7 @@ def test_checkpoint_round_trip_restores_complete_sac_training_state(tmp_path: Pa
     servicer.TrainBatch(learner_pb2.TrainBatchRequest(batch=transition_pb2.TransitionBatch(transitions=transitions)), AbortContext())
     saved_actor = {name: value.detach().clone() for name, value in servicer._agent.actor.state_dict().items()}
 
-    saved = servicer.SaveCheckpoint(learner_pb2.SaveCheckpointRequest(model_name="grasp-v1"), AbortContext())
+    saved = servicer.SaveCheckpoint(learner_pb2.SaveCheckpointRequest(), AbortContext())
     restored = LearnerServicer(config, model_name="grasp-v1")
 
     assert saved.model_name == "grasp-v1"

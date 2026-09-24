@@ -91,10 +91,152 @@ def test_six_channel_antagonistic_decoder_dead_zone_and_bounds(tmp_path) -> None
     assert torch.all(action.abs() <= torch.tensor([0.2, 0.3, 1.0]))
 
 
+def test_dual_loop_actor_starts_neutral_and_changes_only_with_policy_signal(tmp_path) -> None:
+    policy = FlyConnectomePolicy(
+        4,
+        3,
+        _graph(tmp_path),
+        hidden_dim=8,
+        residual_alpha=(0.2, 0.15, 0.25),
+        tactile_observation_indices=(0, 1, 2, 3),
+    )
+    observations = torch.zeros((2, 4))
+    final, fly_base, residual, _ = policy.sample_decomposed(observations, deterministic=True)
+
+    assert torch.allclose(fly_base, torch.zeros_like(fly_base), atol=1e-6)
+    assert torch.allclose(final, torch.zeros_like(final), atol=1e-6)
+    assert torch.allclose(residual, torch.zeros_like(residual), atol=1e-6)
+
+
+def test_dual_loop_actor_exposes_exact_base_residual_composition(tmp_path) -> None:
+    policy = FlyConnectomePolicy(
+        4,
+        3,
+        _graph(tmp_path),
+        hidden_dim=8,
+        residual_alpha=(0.2, 0.15, 0.25),
+        tactile_observation_indices=(0, 1, 2, 3),
+    )
+    observations = torch.tensor([[0.2, -0.3, 0.4, -0.5], [-0.1, 0.6, -0.2, 0.3]])
+    final, fly_base, residual, log_probability = policy.sample_decomposed(observations, deterministic=True)
+
+    expected = torch.clamp(fly_base + torch.tensor([0.2, 0.15, 0.25]) * residual, -1.0, 1.0)
+    assert final.shape == fly_base.shape == residual.shape == (2, 3)
+    assert log_probability.shape == (2, 1)
+    assert torch.allclose(final, expected)
+    assert torch.isfinite(final).all()
+
+
+def test_fly_base_tracks_object_with_signed_closed_loop_reflex(tmp_path) -> None:
+    policy = FlyConnectomePolicy(
+        30,
+        3,
+        _graph(tmp_path),
+        hidden_dim=8,
+        residual_alpha=(0.0, 0.0, 0.0),
+        tactile_observation_indices=(17, 16, 18, 26),
+    )
+    observations = torch.zeros((3, 30), dtype=torch.float32)
+    observations[0, 10] = 0.4
+    observations[0, 11] = 0.5
+    observations[0, 20] = 1.0
+    observations[1, 10] = -0.4
+    observations[1, 11] = 0.5
+    observations[1, 20] = 1.0
+    observations[2, 10] = 0.0
+    observations[2, 11] = 0.5
+    observations[2, 20] = 1.0
+
+    _, fly_base, _, _ = policy.sample_decomposed(observations, deterministic=True)
+
+    assert fly_base[0, 0] < 0
+    assert fly_base[1, 0] > 0
+    assert fly_base[2, 0] == pytest.approx(0.0, abs=1e-6)
+    assert fly_base[0, 1] == pytest.approx(0.0, abs=1e-6)
+    assert fly_base[1, 1] == pytest.approx(0.0, abs=1e-6)
+    assert fly_base[2, 1] < 0
+    assert fly_base[2, 2] > 0
+
+
+def test_fly_base_is_pure_per_step_closed_loop_reflex(tmp_path) -> None:
+    policy = FlyConnectomePolicy(
+        30,
+        3,
+        _graph(tmp_path),
+        hidden_dim=8,
+        residual_alpha=(0.0, 0.0, 0.0),
+        tactile_observation_indices=(17, 16, 18, 26),
+    )
+    observations = torch.tensor([
+        [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.20, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -0.20, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+    ], dtype=torch.float32)
+
+    _, fly_base, _, _ = policy.sample_decomposed(observations, deterministic=True)
+
+    assert fly_base[0, 0] < 0.0
+    assert fly_base[1, 0] > 0.0
+    assert fly_base[0, 1] == pytest.approx(0.0, abs=1e-6)
+    assert fly_base[1, 1] == pytest.approx(0.0, abs=1e-6)
+
+
+def test_fly_base_raises_lift_and_transport_after_attachment(tmp_path) -> None:
+    policy = FlyConnectomePolicy(
+        30,
+        3,
+        _graph(tmp_path),
+        hidden_dim=8,
+        residual_alpha=(0.0, 0.0, 0.0),
+        tactile_observation_indices=(17, 16, 18, 26),
+    )
+    attached_low = torch.zeros((1, 30), dtype=torch.float32)
+    attached_low[:, 1] = 0.20
+    attached_low[:, 12] = 0.10
+    attached_low[:, 15] = 1.0
+
+    attached_high = torch.zeros((1, 30), dtype=torch.float32)
+    attached_high[:, 1] = 0.80
+    attached_high[:, 12] = 0.25
+    attached_high[:, 15] = 1.0
+
+    _, low_base, _, _ = policy.sample_decomposed(attached_low, deterministic=True)
+    _, high_base, _, _ = policy.sample_decomposed(attached_high, deterministic=True)
+
+    assert low_base[0, 1] > 0.0
+    assert high_base[0, 0] > 0.0
+    assert high_base[0, 1] == pytest.approx(0.0, abs=1e-6)
+    assert high_base[0, 2] > 0.8
+
+
+def test_tactile_slip_changes_residual_grip_without_changing_fly_base(tmp_path) -> None:
+    policy = FlyConnectomePolicy(
+        4,
+        3,
+        _graph(tmp_path),
+        hidden_dim=8,
+        tactile_observation_indices=(0, 1, 2, 3),
+    )
+    with torch.no_grad():
+        for parameter in policy.parameters():
+            parameter.zero_()
+        # Route only tactile[slipSeverity] through one residual hidden unit to
+        # the grip output. The connectome/base latent stays identically zero.
+        policy.residual_head[0].weight[0, 8] = 1.0
+        policy.residual_head[2].weight[2, 0] = 1.0
+    observations = torch.zeros((2, 4))
+    observations[1, 0] = 1.0
+
+    final, fly_base, residual, _ = policy.sample_decomposed(observations, deterministic=True)
+
+    assert torch.allclose(fly_base[0], fly_base[1])
+    assert residual[1, 2] > residual[0, 2]
+    assert final[1, 2] > final[0, 2]
+
+
 def test_phase_gated_decoder_uses_transport_head_only_after_attachment(tmp_path) -> None:
     """The graph state is shared; the selected decoder changes by task state."""
     policy = FlyConnectomePolicy(
-        23,
+        30,
         3,
         _graph(tmp_path),
         hidden_dim=8,
@@ -109,7 +251,7 @@ def test_phase_gated_decoder_uses_transport_head_only_after_attachment(tmp_path)
         policy.transport_motor_gain.fill_(1.0)
         policy.transport_motor_bias.copy_(torch.tensor([-1.0, 1.0, 0.0, 0.0, 0.0, 0.0]))
     channels = torch.zeros((2, 6))
-    observations = torch.zeros((2, 23))
+    observations = torch.zeros((2, 30))
     observations[0, 15] = -1.0  # detached: acquisition decoder
     observations[0, 19] = -1.0
     observations[1, 15] = 1.0   # attached and MoveToTarget: transport decoder
@@ -153,6 +295,7 @@ def test_connectome_decoder_only_training_unlocks_after_stability_window(tmp_pat
         train_edge_gains=False,
         freeze_topology=True,
         full_actor_unlock_step=32,
+        base_warmup_steps=32,
         phase_gated_decoder=True,
         object_attached_observation_index=1,
         phase_observation_index=2,
@@ -168,7 +311,11 @@ def test_connectome_decoder_only_training_unlocks_after_stability_window(tmp_pat
     assert agent.actor.motor_bias.requires_grad
     assert agent.actor.transport_motor_gain.requires_grad
     assert agent.actor.transport_motor_bias.requires_grad
-    assert agent.actor.log_std.requires_grad
+    assert not agent.actor.log_std.requires_grad
+    assert all(parameter.requires_grad for parameter in agent.actor.base_head.parameters())
+    assert not any(parameter.requires_grad for parameter in agent.actor.residual_head.parameters())
+    learning_rates = sorted(group["lr"] for group in agent.actor_optimizer.param_groups)
+    assert learning_rates == pytest.approx([config.learning_rate, config.learning_rate])
 
     agent.training_step = 64
     agent._configure_actor_trainability()
@@ -176,3 +323,7 @@ def test_connectome_decoder_only_training_unlocks_after_stability_window(tmp_pat
     assert agent.actor.leak_logit.requires_grad
     assert agent.actor.edge_log_gains.requires_grad
     assert agent.actor.sensory_encoder[0].weight.requires_grad
+    assert agent.actor.log_std.requires_grad
+    assert all(parameter.requires_grad for parameter in agent.actor.residual_head.parameters())
+    learning_rates = sorted(group["lr"] for group in agent.actor_optimizer.param_groups)
+    assert learning_rates == pytest.approx([config.learning_rate * 0.1, config.learning_rate])

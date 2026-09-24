@@ -25,4 +25,7 @@ type StepResult struct {
 	Outcome Outcome
 	Done    bool
 	Info    map[string]float32
+	// AppliedAction is optional. A decomposed-action task sets it when an
+	// ablation mode applies fly-base or residual alone instead of `final`.
+	AppliedAction Action
 }

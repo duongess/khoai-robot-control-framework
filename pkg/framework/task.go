@@ -6,6 +6,14 @@ type Task interface {
 	Step(Action) (StepResult, error)
 }
 
+// DecomposedActionTask optionally consumes the two branches of a dual-loop
+// actor in addition to its composed action. Tasks use this for control-mode
+// ablations and telemetry; the ordinary three-dimensional action contract is
+// unchanged for all existing Task implementations.
+type DecomposedActionTask interface {
+	StepDecomposed(final, flyBase, residual Action) (StepResult, error)
+}
+
 // ReviewableTask is optional. A human can approve a curriculum transition only
 // while the runtime is paused; approval does not create a synthetic reward or
 // successful replay transition.

@@ -16,3 +16,9 @@ controller:
   action_dead_zone: 0.001
   max_horizontal_speed: 0.2
   max_vertical_speed: 0.2
+  dual_loop:
+    residual_alpha: [0.20, 0.15, 0.30]
+    base_warmup_steps: 128
+    base_learning_rate_multiplier: 0.10
+    # Force-control v33 observation order.
+    tactile_observation_indices: [17, 16, 18, 26]

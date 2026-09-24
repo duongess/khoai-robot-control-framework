@@ -19,12 +19,16 @@ class PredictBatchRequest(_message.Message):
     def __init__(self, environment: _Optional[_Union[_environment_pb2.EnvironmentDescriptor, _Mapping]] = ..., states: _Optional[_Iterable[_Union[_environment_pb2.State, _Mapping]]] = ..., policy_version: _Optional[int] = ...) -> None: ...
 
 class PredictBatchResponse(_message.Message):
-    __slots__ = ("actions", "policy_version")
+    __slots__ = ("actions", "policy_version", "fly_base_actions", "residual_actions")
     ACTIONS_FIELD_NUMBER: _ClassVar[int]
     POLICY_VERSION_FIELD_NUMBER: _ClassVar[int]
+    FLY_BASE_ACTIONS_FIELD_NUMBER: _ClassVar[int]
+    RESIDUAL_ACTIONS_FIELD_NUMBER: _ClassVar[int]
     actions: _containers.RepeatedCompositeFieldContainer[_environment_pb2.Action]
     policy_version: int
-    def __init__(self, actions: _Optional[_Iterable[_Union[_environment_pb2.Action, _Mapping]]] = ..., policy_version: _Optional[int] = ...) -> None: ...
+    fly_base_actions: _containers.RepeatedCompositeFieldContainer[_environment_pb2.Action]
+    residual_actions: _containers.RepeatedCompositeFieldContainer[_environment_pb2.Action]
+    def __init__(self, actions: _Optional[_Iterable[_Union[_environment_pb2.Action, _Mapping]]] = ..., policy_version: _Optional[int] = ..., fly_base_actions: _Optional[_Iterable[_Union[_environment_pb2.Action, _Mapping]]] = ..., residual_actions: _Optional[_Iterable[_Union[_environment_pb2.Action, _Mapping]]] = ...) -> None: ...
 
 class TrainBatchRequest(_message.Message):
     __slots__ = ("batch", "policy_version")

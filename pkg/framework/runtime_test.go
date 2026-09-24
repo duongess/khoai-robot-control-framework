@@ -113,9 +113,9 @@ type checkpointRuntimeLearner struct {
 	savedName string
 }
 
-func (l *checkpointRuntimeLearner) SaveCheckpoint(_ context.Context, modelName string) (CheckpointResult, error) {
-	l.savedName = modelName
-	return CheckpointResult{ModelName: modelName, PolicyVersion: 4, TrainingStep: 9}, nil
+func (l *checkpointRuntimeLearner) SaveCheckpoint(_ context.Context) (CheckpointResult, error) {
+	l.savedName = "grasp-v1"
+	return CheckpointResult{ModelName: l.savedName, PolicyVersion: 4, TrainingStep: 9}, nil
 }
 
 func (l *blockingTrainingLearner) TrainBatch(_ context.Context, _ []Transition) (TrainingResult, error) {

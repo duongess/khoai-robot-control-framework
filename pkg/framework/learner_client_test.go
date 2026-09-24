@@ -28,7 +28,9 @@ func (s *learnerServiceStub) HealthCheck(context.Context, *learnerv1.HealthCheck
 func (s *learnerServiceStub) PredictBatch(_ context.Context, request *learnerv1.PredictBatchRequest) (*learnerv1.PredictBatchResponse, error) {
 	s.predictRequest = request
 	return &learnerv1.PredictBatchResponse{
-		Actions: []*learnerv1.Action{{Values: []float32{0.5}}, {Values: []float32{0.5}}},
+		Actions:         []*learnerv1.Action{{Values: []float32{0.5}}, {Values: []float32{0.5}}},
+		FlyBaseActions:  []*learnerv1.Action{{Values: []float32{0.3}}, {Values: []float32{0.3}}},
+		ResidualActions: []*learnerv1.Action{{Values: []float32{0.2}}, {Values: []float32{0.2}}},
 	}, nil
 }
 
@@ -39,7 +41,7 @@ func (s *learnerServiceStub) TrainBatch(_ context.Context, request *learnerv1.Tr
 
 func (s *learnerServiceStub) SaveCheckpoint(_ context.Context, request *learnerv1.SaveCheckpointRequest) (*learnerv1.SaveCheckpointResponse, error) {
 	s.saveRequest = request
-	return &learnerv1.SaveCheckpointResponse{PolicyVersion: 11, TrainingStep: 23}, nil
+	return &learnerv1.SaveCheckpointResponse{ModelName: "grasp-v1", PolicyVersion: 11, TrainingStep: 23}, nil
 }
 
 func TestLearnerClientHealthCheck(t *testing.T) {
@@ -69,6 +71,9 @@ func TestLearnerClientPredictBatchMapsStatesAndActions(t *testing.T) {
 	}
 	if len(prediction.Actions) != 2 || prediction.Actions[0][0] != 0.5 || prediction.Actions[1][0] != 0.5 {
 		t.Fatalf("PredictBatch() actions = %#v", prediction.Actions)
+	}
+	if len(prediction.FlyBaseActions) != 2 || prediction.FlyBaseActions[0][0] != 0.3 || len(prediction.ResidualActions) != 2 || prediction.ResidualActions[0][0] != 0.2 {
+		t.Fatalf("PredictBatch() decomposition = base %#v residual %#v", prediction.FlyBaseActions, prediction.ResidualActions)
 	}
 }
 

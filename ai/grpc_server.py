@@ -96,6 +96,15 @@ class LearnerServicer(learner_pb2_grpc.LearnerServiceServicer):
             max_horizontal_speed=self._config.max_horizontal_speed,
             max_vertical_speed=self._config.max_vertical_speed,
             max_gripper_command=self._config.max_gripper_command,
+            residual_alpha_x=self._config.residual_alpha_x,
+            residual_alpha_y=self._config.residual_alpha_y,
+            residual_alpha_grip=self._config.residual_alpha_grip,
+            base_warmup_steps=self._config.base_warmup_steps,
+            base_learning_rate_multiplier=self._config.base_learning_rate_multiplier,
+            slip_severity_observation_index=self._config.slip_severity_observation_index,
+            grip_force_observation_index=self._config.grip_force_observation_index,
+            vertical_acceleration_observation_index=self._config.vertical_acceleration_observation_index,
+            previous_vertical_action_observation_index=self._config.previous_vertical_action_observation_index,
         ))
         self._samples_seen = 0
         # Version zero is reserved by the protocol for "latest". Every actual
@@ -135,12 +144,15 @@ class LearnerServicer(learner_pb2_grpc.LearnerServiceServicer):
                 )
             with torch.inference_mode():
                 mean, log_std = actor(states)
-                predicted_actions = self._agent.act_with_actor(
+                predicted_actions, fly_base_actions, residual_actions = self._agent.act_with_actor_components(
                     actor, states, deterministic=self._config.deterministic_inference
-                ).clamp(-1, 1)
+                )
+                predicted_actions = predicted_actions.clamp(-1, 1)
         except ValueError as error:
             context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(error))
         actions = [environment_pb2.Action(values=[float(value) for value in action]) for action in predicted_actions]
+        fly_base = [environment_pb2.Action(values=[float(value) for value in action]) for action in fly_base_actions]
+        residuals = [environment_pb2.Action(values=[float(value) for value in action]) for action in residual_actions]
         self._predict_requests += 1
         if self._predict_requests % self._config.log_every_n_requests == 0:
             LOGGER.info("predict_batch", extra={"fields": {
@@ -150,10 +162,17 @@ class LearnerServicer(learner_pb2_grpc.LearnerServiceServicer):
                 "deterministic": self._config.deterministic_inference,
                 "action_mean": [float(value) for value in predicted_actions.mean(dim=0)],
                 "action_std": [float(value) for value in predicted_actions.std(dim=0, unbiased=False)],
+                "fly_base_mean": [float(value) for value in fly_base_actions.mean(dim=0)],
+                "sac_residual_mean": [float(value) for value in residual_actions.mean(dim=0)],
                 "actor_mean_pre_tanh": [float(value) for value in mean.detach().mean(dim=0)],
                 "actor_log_std": [float(value) for value in log_std.detach().mean(dim=0)],
             }})
-        return learner_pb2.PredictBatchResponse(actions=actions, policy_version=served_version)
+        return learner_pb2.PredictBatchResponse(
+            actions=actions,
+            policy_version=served_version,
+            fly_base_actions=fly_base,
+            residual_actions=residuals,
+        )
 
     def TrainBatch(self, request, context):
         if not request.HasField("batch"):

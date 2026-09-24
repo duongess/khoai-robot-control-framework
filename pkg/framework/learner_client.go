@@ -39,8 +39,10 @@ type HealthStatus struct {
 }
 
 type PredictionResult struct {
-	Actions       []Action
-	PolicyVersion uint64
+	Actions         []Action
+	FlyBaseActions  []Action
+	ResidualActions []Action
+	PolicyVersion   uint64
 }
 
 type TrainingResult struct {
@@ -144,7 +146,31 @@ func (c *LearnerClient) PredictBatch(ctx context.Context, states []State, policy
 		}
 		actions[index] = append(Action(nil), values...)
 	}
-	return PredictionResult{Actions: actions, PolicyVersion: response.GetPolicyVersion()}, nil
+	decodeOptional := func(name string, values []*learnerv1.Action) ([]Action, error) {
+		if len(values) == 0 {
+			return nil, nil
+		}
+		if len(values) != len(states) {
+			return nil, fmt.Errorf("predict batch returned %d %s actions for %d states", len(values), name, len(states))
+		}
+		decoded := make([]Action, len(values))
+		for index, action := range values {
+			if err := validateFinite(name+" action", action.GetValues()); err != nil {
+				return nil, fmt.Errorf("predict batch %s action %d: %w", name, index, err)
+			}
+			decoded[index] = append(Action(nil), action.GetValues()...)
+		}
+		return decoded, nil
+	}
+	flyBaseActions, err := decodeOptional("fly base", response.GetFlyBaseActions())
+	if err != nil {
+		return PredictionResult{}, err
+	}
+	residualActions, err := decodeOptional("residual", response.GetResidualActions())
+	if err != nil {
+		return PredictionResult{}, err
+	}
+	return PredictionResult{Actions: actions, FlyBaseActions: flyBaseActions, ResidualActions: residualActions, PolicyVersion: response.GetPolicyVersion()}, nil
 }
 
 func (c *LearnerClient) TrainBatch(ctx context.Context, transitions []Transition) (TrainingResult, error) {
@@ -174,8 +200,8 @@ func (c *LearnerClient) TrainBatch(ctx context.Context, transitions []Transition
 	return TrainingResult{Accepted: response.GetAccepted(), SamplesSeen: response.GetSamplesSeen(), ActorLoss: response.GetActorLoss(), CriticLoss: response.GetCriticLoss(), AlphaLoss: response.GetAlphaLoss(), Entropy: response.GetEntropy(), CriticOneQ: response.GetCriticOneQ(), CriticTwoQ: response.GetCriticTwoQ(), Alpha: response.GetAlpha(), ActorLogStdHorizontal: response.GetActorLogStdHorizontal(), ActorLogStdVertical: response.GetActorLogStdVertical(), ActorLogStdGripper: response.GetActorLogStdGripper(), PolicyVersion: response.GetPolicyVersion(), TrainingStep: response.GetTrainingStep()}, nil
 }
 
-// SaveCheckpoint persists the complete SAC state under modelName. An empty
-// name means "overwrite the learner's active named model".
+// SaveCheckpoint persists the complete SAC state by overwriting the learner's
+// active CLI-selected model name.
 func (c *LearnerClient) SaveCheckpoint(ctx context.Context) (CheckpointResult, error) {
 	callContext, cancel, err := c.requestContext(ctx)
 	if err != nil {
