@@ -169,11 +169,12 @@ class FlyConnectomePolicy(nn.Module):
         return action, log_probability.sum(dim=-1, keepdim=True)
 
     def decode_motor_channels(self, channels: torch.Tensor) -> torch.Tensor:
-        """Decode six engineered channels to normalized robot-arm commands.
+        """Decode six engineered channels to normalized residual corrections.
 
         ``front_right - front_left`` controls horizontal movement; middle and hind
-        pairs respectively control vertical movement and the gripper.  The result
-        remains within the existing generic SAC action contract ``[-1, 1]``.
+        pairs respectively correct horizontal motion, vertical motion, and grip
+        force. The Go environment composes these values with its deterministic
+        FSM base command. The result remains within ``[-1, 1]``.
         """
         if channels.ndim != 2 or channels.shape[1] != len(MOTOR_CHANNELS):
             raise ValueError("channels must have shape (batch, 6)")

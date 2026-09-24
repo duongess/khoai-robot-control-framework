@@ -10,6 +10,10 @@ load_dotenv()  # Load environment variables from .env file if present
 @dataclass(frozen=True)
 class SACConfig:
     state_dim: int
+    # In force-control residual mode the three actor outputs are bounded
+    # corrections (delta X velocity, delta Y velocity, delta grip setpoint),
+    # not direct macro motor commands. Their physical scales live in the Go
+    # environment so every actor implementation shares one action contract.
     action_dim: int = 3
     hidden_dim: int = 128
     # The force-control task uses a 0.1 s physics step and contains a 30 s
