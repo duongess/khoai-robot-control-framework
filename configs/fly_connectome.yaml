@@ -1,0 +1,24 @@
+# Existing Go task APIs and gRPC actions remain unchanged; these configure the Python learner.
+controller:
+  type: fly_connectome
+  graph_path: data/connectome/connectome_graph.npz
+  propagation_steps: 4
+  train_edge_gains: true
+  freeze_topology: true
+  # A common sparse connectome core with learned, phase-conditioned decoder
+  # heads.  Force-control emits ObjectAttached at index 15 and Phase at 19.
+  phase_gated_decoder: true
+  object_attached_observation_index: 15
+  phase_observation_index: 19
+  # PhaseLift is -1/9 and PhaseMoveToTarget is +1/9 after normalization.
+  transport_phase_threshold: 0.0
+  activation: tanh
+  action_dead_zone: 0.001
+  max_horizontal_speed: 0.2
+  max_vertical_speed: 0.2
+  dual_loop:
+    residual_alpha: [0.20, 0.15, 0.30]
+    base_warmup_steps: 128
+    base_learning_rate_multiplier: 0.10
+    # Force-control v33 observation order.
+    tactile_observation_indices: [17, 16, 18, 26]

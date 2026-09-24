@@ -16,6 +16,10 @@ message PredictBatchRequest {
 message PredictBatchResponse {
   repeated Action actions = 1;
   uint64 policy_version = 2;
+  // Optional decomposition for dual-loop actors. `actions` remains the
+  // three-dimensional command stored in replay and consumed by the critic.
+  repeated Action fly_base_actions = 3;
+  repeated Action residual_actions = 4;
 }
 
 message TrainBatchRequest {
@@ -32,6 +36,12 @@ message TrainBatchResponse {
   float alpha_loss = 6;
   float entropy = 7;
   uint64 training_step = 8;
+  float critic_one_q = 9;
+  float critic_two_q = 10;
+  float alpha = 11;
+  float actor_log_std_horizontal = 12;
+  float actor_log_std_vertical = 13;
+  float actor_log_std_gripper = 14;
 }
 
 message HealthCheckRequest {}
@@ -41,10 +51,26 @@ message HealthCheckResponse {
   uint64 policy_version = 2;
   uint64 training_step = 3;
   string device = 4;
+  // Empty when this process is a new, unsaved learner.
+  string model_name = 5;
+}
+
+// SaveCheckpoint persists the complete SAC training state under the learner's
+// active CLI model name (`python -m ai <name>`), overwriting that name only.
+// Keeping the request empty prevents a dashboard from selecting a filesystem
+// path or silently changing the active model identity.
+message SaveCheckpointRequest {
+}
+
+message SaveCheckpointResponse {
+  string model_name = 1;
+  uint64 policy_version = 2;
+  uint64 training_step = 3;
 }
 
 service LearnerService {
   rpc PredictBatch(PredictBatchRequest) returns (PredictBatchResponse);
   rpc TrainBatch(TrainBatchRequest) returns (TrainBatchResponse);
   rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
+  rpc SaveCheckpoint(SaveCheckpointRequest) returns (SaveCheckpointResponse);
 }

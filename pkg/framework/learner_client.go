@@ -17,9 +17,18 @@ const DefaultLearnerAddress = "127.0.0.1:50051"
 // Learner is the framework-owned abstraction for the SAC transport.
 type Learner interface {
 	HealthCheck(context.Context) (HealthStatus, error)
-	PredictBatch(context.Context, []State) (PredictionResult, error)
+	// PredictBatch evaluates states with policyVersion. Zero asks the learner
+	// for its latest immutable snapshot; callers pin the returned version for
+	// the rest of an episode.
+	PredictBatch(context.Context, []State, uint64) (PredictionResult, error)
 	TrainBatch(context.Context, []Transition) (TrainingResult, error)
 	Close() error
+}
+
+// CheckpointingLearner is intentionally optional so existing task learners
+// remain source-compatible. The local gRPC SAC learner implements it.
+type CheckpointingLearner interface {
+	SaveCheckpoint(context.Context) (CheckpointResult, error)
 }
 
 type HealthStatus struct {
@@ -30,17 +39,32 @@ type HealthStatus struct {
 }
 
 type PredictionResult struct {
-	Actions       []Action
-	PolicyVersion uint64
+	Actions         []Action
+	FlyBaseActions  []Action
+	ResidualActions []Action
+	PolicyVersion   uint64
 }
 
 type TrainingResult struct {
-	Accepted      bool
-	SamplesSeen   uint64
-	ActorLoss     float32
-	CriticLoss    float32
-	AlphaLoss     float32
-	Entropy       float32
+	Accepted              bool
+	SamplesSeen           uint64
+	ActorLoss             float32
+	CriticLoss            float32
+	AlphaLoss             float32
+	Entropy               float32
+	CriticOneQ            float32
+	CriticTwoQ            float32
+	Alpha                 float32
+	ActorLogStdHorizontal float32
+	ActorLogStdVertical   float32
+	ActorLogStdGripper    float32
+	PolicyVersion         uint64
+	TrainingStep          uint64
+}
+
+// CheckpointResult identifies one durable, complete learner save.
+type CheckpointResult struct {
+	ModelName     string
 	PolicyVersion uint64
 	TrainingStep  uint64
 }
@@ -91,11 +115,11 @@ func (c *LearnerClient) HealthCheck(ctx context.Context) (HealthStatus, error) {
 	return HealthStatus{Ready: response.GetReady(), PolicyVersion: response.GetPolicyVersion(), TrainingStep: response.GetTrainingStep(), Device: response.GetDevice()}, nil
 }
 
-func (c *LearnerClient) PredictBatch(ctx context.Context, states []State) (PredictionResult, error) {
+func (c *LearnerClient) PredictBatch(ctx context.Context, states []State, policyVersion uint64) (PredictionResult, error) {
 	if len(states) == 0 {
 		return PredictionResult{}, errors.New("predict batch requires at least one state")
 	}
-	request := &learnerv1.PredictBatchRequest{States: make([]*learnerv1.State, len(states))}
+	request := &learnerv1.PredictBatchRequest{States: make([]*learnerv1.State, len(states)), PolicyVersion: policyVersion}
 	for index, state := range states {
 		if err := validateFinite("state", state); err != nil {
 			return PredictionResult{}, fmt.Errorf("predict batch state %d: %w", index, err)
@@ -122,7 +146,31 @@ func (c *LearnerClient) PredictBatch(ctx context.Context, states []State) (Predi
 		}
 		actions[index] = append(Action(nil), values...)
 	}
-	return PredictionResult{Actions: actions, PolicyVersion: response.GetPolicyVersion()}, nil
+	decodeOptional := func(name string, values []*learnerv1.Action) ([]Action, error) {
+		if len(values) == 0 {
+			return nil, nil
+		}
+		if len(values) != len(states) {
+			return nil, fmt.Errorf("predict batch returned %d %s actions for %d states", len(values), name, len(states))
+		}
+		decoded := make([]Action, len(values))
+		for index, action := range values {
+			if err := validateFinite(name+" action", action.GetValues()); err != nil {
+				return nil, fmt.Errorf("predict batch %s action %d: %w", name, index, err)
+			}
+			decoded[index] = append(Action(nil), action.GetValues()...)
+		}
+		return decoded, nil
+	}
+	flyBaseActions, err := decodeOptional("fly base", response.GetFlyBaseActions())
+	if err != nil {
+		return PredictionResult{}, err
+	}
+	residualActions, err := decodeOptional("residual", response.GetResidualActions())
+	if err != nil {
+		return PredictionResult{}, err
+	}
+	return PredictionResult{Actions: actions, FlyBaseActions: flyBaseActions, ResidualActions: residualActions, PolicyVersion: response.GetPolicyVersion()}, nil
 }
 
 func (c *LearnerClient) TrainBatch(ctx context.Context, transitions []Transition) (TrainingResult, error) {
@@ -145,11 +193,29 @@ func (c *LearnerClient) TrainBatch(ctx context.Context, transitions []Transition
 	if err != nil {
 		return TrainingResult{}, fmt.Errorf("train batch: %w", err)
 	}
-	metrics := []float32{response.GetActorLoss(), response.GetCriticLoss(), response.GetAlphaLoss(), response.GetEntropy()}
+	metrics := []float32{response.GetActorLoss(), response.GetCriticLoss(), response.GetAlphaLoss(), response.GetEntropy(), response.GetCriticOneQ(), response.GetCriticTwoQ(), response.GetAlpha(), response.GetActorLogStdHorizontal(), response.GetActorLogStdVertical(), response.GetActorLogStdGripper()}
 	if err := validateFinite("training metric", metrics); err != nil {
 		return TrainingResult{}, err
 	}
-	return TrainingResult{Accepted: response.GetAccepted(), SamplesSeen: response.GetSamplesSeen(), ActorLoss: response.GetActorLoss(), CriticLoss: response.GetCriticLoss(), AlphaLoss: response.GetAlphaLoss(), Entropy: response.GetEntropy(), PolicyVersion: response.GetPolicyVersion(), TrainingStep: response.GetTrainingStep()}, nil
+	return TrainingResult{Accepted: response.GetAccepted(), SamplesSeen: response.GetSamplesSeen(), ActorLoss: response.GetActorLoss(), CriticLoss: response.GetCriticLoss(), AlphaLoss: response.GetAlphaLoss(), Entropy: response.GetEntropy(), CriticOneQ: response.GetCriticOneQ(), CriticTwoQ: response.GetCriticTwoQ(), Alpha: response.GetAlpha(), ActorLogStdHorizontal: response.GetActorLogStdHorizontal(), ActorLogStdVertical: response.GetActorLogStdVertical(), ActorLogStdGripper: response.GetActorLogStdGripper(), PolicyVersion: response.GetPolicyVersion(), TrainingStep: response.GetTrainingStep()}, nil
+}
+
+// SaveCheckpoint persists the complete SAC state by overwriting the learner's
+// active CLI-selected model name.
+func (c *LearnerClient) SaveCheckpoint(ctx context.Context) (CheckpointResult, error) {
+	callContext, cancel, err := c.requestContext(ctx)
+	if err != nil {
+		return CheckpointResult{}, err
+	}
+	defer cancel()
+	response, err := c.client.SaveCheckpoint(callContext, &learnerv1.SaveCheckpointRequest{})
+	if err != nil {
+		return CheckpointResult{}, fmt.Errorf("save checkpoint: %w", err)
+	}
+	if response.GetModelName() == "" {
+		return CheckpointResult{}, errors.New("save checkpoint returned an empty model name")
+	}
+	return CheckpointResult{ModelName: response.GetModelName(), PolicyVersion: response.GetPolicyVersion(), TrainingStep: response.GetTrainingStep()}, nil
 }
 
 func (c *LearnerClient) Close() error {

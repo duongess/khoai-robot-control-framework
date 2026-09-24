@@ -85,8 +85,12 @@ type PredictBatchResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Actions       []*Action              `protobuf:"bytes,1,rep,name=actions,proto3" json:"actions,omitempty"`
 	PolicyVersion uint64                 `protobuf:"varint,2,opt,name=policy_version,json=policyVersion,proto3" json:"policy_version,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	// Optional decomposition for dual-loop actors. `actions` remains the
+	// three-dimensional command stored in replay and consumed by the critic.
+	FlyBaseActions  []*Action `protobuf:"bytes,3,rep,name=fly_base_actions,json=flyBaseActions,proto3" json:"fly_base_actions,omitempty"`
+	ResidualActions []*Action `protobuf:"bytes,4,rep,name=residual_actions,json=residualActions,proto3" json:"residual_actions,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *PredictBatchResponse) Reset() {
@@ -131,6 +135,20 @@ func (x *PredictBatchResponse) GetPolicyVersion() uint64 {
 		return x.PolicyVersion
 	}
 	return 0
+}
+
+func (x *PredictBatchResponse) GetFlyBaseActions() []*Action {
+	if x != nil {
+		return x.FlyBaseActions
+	}
+	return nil
+}
+
+func (x *PredictBatchResponse) GetResidualActions() []*Action {
+	if x != nil {
+		return x.ResidualActions
+	}
+	return nil
 }
 
 type TrainBatchRequest struct {
@@ -186,17 +204,23 @@ func (x *TrainBatchRequest) GetPolicyVersion() uint64 {
 }
 
 type TrainBatchResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Accepted      bool                   `protobuf:"varint,1,opt,name=accepted,proto3" json:"accepted,omitempty"`
-	SamplesSeen   uint64                 `protobuf:"varint,2,opt,name=samples_seen,json=samplesSeen,proto3" json:"samples_seen,omitempty"`
-	PolicyVersion uint64                 `protobuf:"varint,3,opt,name=policy_version,json=policyVersion,proto3" json:"policy_version,omitempty"`
-	ActorLoss     float32                `protobuf:"fixed32,4,opt,name=actor_loss,json=actorLoss,proto3" json:"actor_loss,omitempty"`
-	CriticLoss    float32                `protobuf:"fixed32,5,opt,name=critic_loss,json=criticLoss,proto3" json:"critic_loss,omitempty"`
-	AlphaLoss     float32                `protobuf:"fixed32,6,opt,name=alpha_loss,json=alphaLoss,proto3" json:"alpha_loss,omitempty"`
-	Entropy       float32                `protobuf:"fixed32,7,opt,name=entropy,proto3" json:"entropy,omitempty"`
-	TrainingStep  uint64                 `protobuf:"varint,8,opt,name=training_step,json=trainingStep,proto3" json:"training_step,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state                 protoimpl.MessageState `protogen:"open.v1"`
+	Accepted              bool                   `protobuf:"varint,1,opt,name=accepted,proto3" json:"accepted,omitempty"`
+	SamplesSeen           uint64                 `protobuf:"varint,2,opt,name=samples_seen,json=samplesSeen,proto3" json:"samples_seen,omitempty"`
+	PolicyVersion         uint64                 `protobuf:"varint,3,opt,name=policy_version,json=policyVersion,proto3" json:"policy_version,omitempty"`
+	ActorLoss             float32                `protobuf:"fixed32,4,opt,name=actor_loss,json=actorLoss,proto3" json:"actor_loss,omitempty"`
+	CriticLoss            float32                `protobuf:"fixed32,5,opt,name=critic_loss,json=criticLoss,proto3" json:"critic_loss,omitempty"`
+	AlphaLoss             float32                `protobuf:"fixed32,6,opt,name=alpha_loss,json=alphaLoss,proto3" json:"alpha_loss,omitempty"`
+	Entropy               float32                `protobuf:"fixed32,7,opt,name=entropy,proto3" json:"entropy,omitempty"`
+	TrainingStep          uint64                 `protobuf:"varint,8,opt,name=training_step,json=trainingStep,proto3" json:"training_step,omitempty"`
+	CriticOneQ            float32                `protobuf:"fixed32,9,opt,name=critic_one_q,json=criticOneQ,proto3" json:"critic_one_q,omitempty"`
+	CriticTwoQ            float32                `protobuf:"fixed32,10,opt,name=critic_two_q,json=criticTwoQ,proto3" json:"critic_two_q,omitempty"`
+	Alpha                 float32                `protobuf:"fixed32,11,opt,name=alpha,proto3" json:"alpha,omitempty"`
+	ActorLogStdHorizontal float32                `protobuf:"fixed32,12,opt,name=actor_log_std_horizontal,json=actorLogStdHorizontal,proto3" json:"actor_log_std_horizontal,omitempty"`
+	ActorLogStdVertical   float32                `protobuf:"fixed32,13,opt,name=actor_log_std_vertical,json=actorLogStdVertical,proto3" json:"actor_log_std_vertical,omitempty"`
+	ActorLogStdGripper    float32                `protobuf:"fixed32,14,opt,name=actor_log_std_gripper,json=actorLogStdGripper,proto3" json:"actor_log_std_gripper,omitempty"`
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
 }
 
 func (x *TrainBatchResponse) Reset() {
@@ -285,6 +309,48 @@ func (x *TrainBatchResponse) GetTrainingStep() uint64 {
 	return 0
 }
 
+func (x *TrainBatchResponse) GetCriticOneQ() float32 {
+	if x != nil {
+		return x.CriticOneQ
+	}
+	return 0
+}
+
+func (x *TrainBatchResponse) GetCriticTwoQ() float32 {
+	if x != nil {
+		return x.CriticTwoQ
+	}
+	return 0
+}
+
+func (x *TrainBatchResponse) GetAlpha() float32 {
+	if x != nil {
+		return x.Alpha
+	}
+	return 0
+}
+
+func (x *TrainBatchResponse) GetActorLogStdHorizontal() float32 {
+	if x != nil {
+		return x.ActorLogStdHorizontal
+	}
+	return 0
+}
+
+func (x *TrainBatchResponse) GetActorLogStdVertical() float32 {
+	if x != nil {
+		return x.ActorLogStdVertical
+	}
+	return 0
+}
+
+func (x *TrainBatchResponse) GetActorLogStdGripper() float32 {
+	if x != nil {
+		return x.ActorLogStdGripper
+	}
+	return 0
+}
+
 type HealthCheckRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -327,6 +393,8 @@ type HealthCheckResponse struct {
 	PolicyVersion uint64                 `protobuf:"varint,2,opt,name=policy_version,json=policyVersion,proto3" json:"policy_version,omitempty"`
 	TrainingStep  uint64                 `protobuf:"varint,3,opt,name=training_step,json=trainingStep,proto3" json:"training_step,omitempty"`
 	Device        string                 `protobuf:"bytes,4,opt,name=device,proto3" json:"device,omitempty"`
+	// Empty when this process is a new, unsaved learner.
+	ModelName     string `protobuf:"bytes,5,opt,name=model_name,json=modelName,proto3" json:"model_name,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -389,6 +457,113 @@ func (x *HealthCheckResponse) GetDevice() string {
 	return ""
 }
 
+func (x *HealthCheckResponse) GetModelName() string {
+	if x != nil {
+		return x.ModelName
+	}
+	return ""
+}
+
+// SaveCheckpoint persists the complete SAC training state under the learner's
+// active CLI model name (`python -m ai <name>`), overwriting that name only.
+// Keeping the request empty prevents a dashboard from selecting a filesystem
+// path or silently changing the active model identity.
+type SaveCheckpointRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SaveCheckpointRequest) Reset() {
+	*x = SaveCheckpointRequest{}
+	mi := &file_learner_v1_learner_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SaveCheckpointRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SaveCheckpointRequest) ProtoMessage() {}
+
+func (x *SaveCheckpointRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_learner_v1_learner_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SaveCheckpointRequest.ProtoReflect.Descriptor instead.
+func (*SaveCheckpointRequest) Descriptor() ([]byte, []int) {
+	return file_learner_v1_learner_proto_rawDescGZIP(), []int{6}
+}
+
+type SaveCheckpointResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ModelName     string                 `protobuf:"bytes,1,opt,name=model_name,json=modelName,proto3" json:"model_name,omitempty"`
+	PolicyVersion uint64                 `protobuf:"varint,2,opt,name=policy_version,json=policyVersion,proto3" json:"policy_version,omitempty"`
+	TrainingStep  uint64                 `protobuf:"varint,3,opt,name=training_step,json=trainingStep,proto3" json:"training_step,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SaveCheckpointResponse) Reset() {
+	*x = SaveCheckpointResponse{}
+	mi := &file_learner_v1_learner_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SaveCheckpointResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SaveCheckpointResponse) ProtoMessage() {}
+
+func (x *SaveCheckpointResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_learner_v1_learner_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SaveCheckpointResponse.ProtoReflect.Descriptor instead.
+func (*SaveCheckpointResponse) Descriptor() ([]byte, []int) {
+	return file_learner_v1_learner_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *SaveCheckpointResponse) GetModelName() string {
+	if x != nil {
+		return x.ModelName
+	}
+	return ""
+}
+
+func (x *SaveCheckpointResponse) GetPolicyVersion() uint64 {
+	if x != nil {
+		return x.PolicyVersion
+	}
+	return 0
+}
+
+func (x *SaveCheckpointResponse) GetTrainingStep() uint64 {
+	if x != nil {
+		return x.TrainingStep
+	}
+	return 0
+}
+
 var File_learner_v1_learner_proto protoreflect.FileDescriptor
 
 const file_learner_v1_learner_proto_rawDesc = "" +
@@ -398,13 +573,15 @@ const file_learner_v1_learner_proto_rawDesc = "" +
 	"\x13PredictBatchRequest\x12C\n" +
 	"\venvironment\x18\x01 \x01(\v2!.learner.v1.EnvironmentDescriptorR\venvironment\x12)\n" +
 	"\x06states\x18\x02 \x03(\v2\x11.learner.v1.StateR\x06states\x12%\n" +
-	"\x0epolicy_version\x18\x03 \x01(\x04R\rpolicyVersion\"k\n" +
+	"\x0epolicy_version\x18\x03 \x01(\x04R\rpolicyVersion\"\xe8\x01\n" +
 	"\x14PredictBatchResponse\x12,\n" +
 	"\aactions\x18\x01 \x03(\v2\x12.learner.v1.ActionR\aactions\x12%\n" +
-	"\x0epolicy_version\x18\x02 \x01(\x04R\rpolicyVersion\"m\n" +
+	"\x0epolicy_version\x18\x02 \x01(\x04R\rpolicyVersion\x12<\n" +
+	"\x10fly_base_actions\x18\x03 \x03(\v2\x12.learner.v1.ActionR\x0eflyBaseActions\x12=\n" +
+	"\x10residual_actions\x18\x04 \x03(\v2\x12.learner.v1.ActionR\x0fresidualActions\"m\n" +
 	"\x11TrainBatchRequest\x121\n" +
 	"\x05batch\x18\x01 \x01(\v2\x1b.learner.v1.TransitionBatchR\x05batch\x12%\n" +
-	"\x0epolicy_version\x18\x02 \x01(\x04R\rpolicyVersion\"\x98\x02\n" +
+	"\x0epolicy_version\x18\x02 \x01(\x04R\rpolicyVersion\"\x93\x04\n" +
 	"\x12TrainBatchResponse\x12\x1a\n" +
 	"\baccepted\x18\x01 \x01(\bR\baccepted\x12!\n" +
 	"\fsamples_seen\x18\x02 \x01(\x04R\vsamplesSeen\x12%\n" +
@@ -416,18 +593,36 @@ const file_learner_v1_learner_proto_rawDesc = "" +
 	"\n" +
 	"alpha_loss\x18\x06 \x01(\x02R\talphaLoss\x12\x18\n" +
 	"\aentropy\x18\a \x01(\x02R\aentropy\x12#\n" +
-	"\rtraining_step\x18\b \x01(\x04R\ftrainingStep\"\x14\n" +
-	"\x12HealthCheckRequest\"\x8f\x01\n" +
+	"\rtraining_step\x18\b \x01(\x04R\ftrainingStep\x12 \n" +
+	"\fcritic_one_q\x18\t \x01(\x02R\n" +
+	"criticOneQ\x12 \n" +
+	"\fcritic_two_q\x18\n" +
+	" \x01(\x02R\n" +
+	"criticTwoQ\x12\x14\n" +
+	"\x05alpha\x18\v \x01(\x02R\x05alpha\x127\n" +
+	"\x18actor_log_std_horizontal\x18\f \x01(\x02R\x15actorLogStdHorizontal\x123\n" +
+	"\x16actor_log_std_vertical\x18\r \x01(\x02R\x13actorLogStdVertical\x121\n" +
+	"\x15actor_log_std_gripper\x18\x0e \x01(\x02R\x12actorLogStdGripper\"\x14\n" +
+	"\x12HealthCheckRequest\"\xae\x01\n" +
 	"\x13HealthCheckResponse\x12\x14\n" +
 	"\x05ready\x18\x01 \x01(\bR\x05ready\x12%\n" +
 	"\x0epolicy_version\x18\x02 \x01(\x04R\rpolicyVersion\x12#\n" +
 	"\rtraining_step\x18\x03 \x01(\x04R\ftrainingStep\x12\x16\n" +
-	"\x06device\x18\x04 \x01(\tR\x06device2\x80\x02\n" +
+	"\x06device\x18\x04 \x01(\tR\x06device\x12\x1d\n" +
+	"\n" +
+	"model_name\x18\x05 \x01(\tR\tmodelName\"\x17\n" +
+	"\x15SaveCheckpointRequest\"\x83\x01\n" +
+	"\x16SaveCheckpointResponse\x12\x1d\n" +
+	"\n" +
+	"model_name\x18\x01 \x01(\tR\tmodelName\x12%\n" +
+	"\x0epolicy_version\x18\x02 \x01(\x04R\rpolicyVersion\x12#\n" +
+	"\rtraining_step\x18\x03 \x01(\x04R\ftrainingStep2\xd9\x02\n" +
 	"\x0eLearnerService\x12Q\n" +
 	"\fPredictBatch\x12\x1f.learner.v1.PredictBatchRequest\x1a .learner.v1.PredictBatchResponse\x12K\n" +
 	"\n" +
 	"TrainBatch\x12\x1d.learner.v1.TrainBatchRequest\x1a\x1e.learner.v1.TrainBatchResponse\x12N\n" +
-	"\vHealthCheck\x12\x1e.learner.v1.HealthCheckRequest\x1a\x1f.learner.v1.HealthCheckResponseBOZMgithub.com/duongess/khoai-robot-control-framework/gen/go/learner/v1;learnerv1b\x06proto3"
+	"\vHealthCheck\x12\x1e.learner.v1.HealthCheckRequest\x1a\x1f.learner.v1.HealthCheckResponse\x12W\n" +
+	"\x0eSaveCheckpoint\x12!.learner.v1.SaveCheckpointRequest\x1a\".learner.v1.SaveCheckpointResponseBOZMgithub.com/duongess/khoai-robot-control-framework/gen/go/learner/v1;learnerv1b\x06proto3"
 
 var (
 	file_learner_v1_learner_proto_rawDescOnce sync.Once
@@ -441,35 +636,41 @@ func file_learner_v1_learner_proto_rawDescGZIP() []byte {
 	return file_learner_v1_learner_proto_rawDescData
 }
 
-var file_learner_v1_learner_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
+var file_learner_v1_learner_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
 var file_learner_v1_learner_proto_goTypes = []any{
-	(*PredictBatchRequest)(nil),   // 0: learner.v1.PredictBatchRequest
-	(*PredictBatchResponse)(nil),  // 1: learner.v1.PredictBatchResponse
-	(*TrainBatchRequest)(nil),     // 2: learner.v1.TrainBatchRequest
-	(*TrainBatchResponse)(nil),    // 3: learner.v1.TrainBatchResponse
-	(*HealthCheckRequest)(nil),    // 4: learner.v1.HealthCheckRequest
-	(*HealthCheckResponse)(nil),   // 5: learner.v1.HealthCheckResponse
-	(*EnvironmentDescriptor)(nil), // 6: learner.v1.EnvironmentDescriptor
-	(*State)(nil),                 // 7: learner.v1.State
-	(*Action)(nil),                // 8: learner.v1.Action
-	(*TransitionBatch)(nil),       // 9: learner.v1.TransitionBatch
+	(*PredictBatchRequest)(nil),    // 0: learner.v1.PredictBatchRequest
+	(*PredictBatchResponse)(nil),   // 1: learner.v1.PredictBatchResponse
+	(*TrainBatchRequest)(nil),      // 2: learner.v1.TrainBatchRequest
+	(*TrainBatchResponse)(nil),     // 3: learner.v1.TrainBatchResponse
+	(*HealthCheckRequest)(nil),     // 4: learner.v1.HealthCheckRequest
+	(*HealthCheckResponse)(nil),    // 5: learner.v1.HealthCheckResponse
+	(*SaveCheckpointRequest)(nil),  // 6: learner.v1.SaveCheckpointRequest
+	(*SaveCheckpointResponse)(nil), // 7: learner.v1.SaveCheckpointResponse
+	(*EnvironmentDescriptor)(nil),  // 8: learner.v1.EnvironmentDescriptor
+	(*State)(nil),                  // 9: learner.v1.State
+	(*Action)(nil),                 // 10: learner.v1.Action
+	(*TransitionBatch)(nil),        // 11: learner.v1.TransitionBatch
 }
 var file_learner_v1_learner_proto_depIdxs = []int32{
-	6, // 0: learner.v1.PredictBatchRequest.environment:type_name -> learner.v1.EnvironmentDescriptor
-	7, // 1: learner.v1.PredictBatchRequest.states:type_name -> learner.v1.State
-	8, // 2: learner.v1.PredictBatchResponse.actions:type_name -> learner.v1.Action
-	9, // 3: learner.v1.TrainBatchRequest.batch:type_name -> learner.v1.TransitionBatch
-	0, // 4: learner.v1.LearnerService.PredictBatch:input_type -> learner.v1.PredictBatchRequest
-	2, // 5: learner.v1.LearnerService.TrainBatch:input_type -> learner.v1.TrainBatchRequest
-	4, // 6: learner.v1.LearnerService.HealthCheck:input_type -> learner.v1.HealthCheckRequest
-	1, // 7: learner.v1.LearnerService.PredictBatch:output_type -> learner.v1.PredictBatchResponse
-	3, // 8: learner.v1.LearnerService.TrainBatch:output_type -> learner.v1.TrainBatchResponse
-	5, // 9: learner.v1.LearnerService.HealthCheck:output_type -> learner.v1.HealthCheckResponse
-	7, // [7:10] is the sub-list for method output_type
-	4, // [4:7] is the sub-list for method input_type
-	4, // [4:4] is the sub-list for extension type_name
-	4, // [4:4] is the sub-list for extension extendee
-	0, // [0:4] is the sub-list for field type_name
+	8,  // 0: learner.v1.PredictBatchRequest.environment:type_name -> learner.v1.EnvironmentDescriptor
+	9,  // 1: learner.v1.PredictBatchRequest.states:type_name -> learner.v1.State
+	10, // 2: learner.v1.PredictBatchResponse.actions:type_name -> learner.v1.Action
+	10, // 3: learner.v1.PredictBatchResponse.fly_base_actions:type_name -> learner.v1.Action
+	10, // 4: learner.v1.PredictBatchResponse.residual_actions:type_name -> learner.v1.Action
+	11, // 5: learner.v1.TrainBatchRequest.batch:type_name -> learner.v1.TransitionBatch
+	0,  // 6: learner.v1.LearnerService.PredictBatch:input_type -> learner.v1.PredictBatchRequest
+	2,  // 7: learner.v1.LearnerService.TrainBatch:input_type -> learner.v1.TrainBatchRequest
+	4,  // 8: learner.v1.LearnerService.HealthCheck:input_type -> learner.v1.HealthCheckRequest
+	6,  // 9: learner.v1.LearnerService.SaveCheckpoint:input_type -> learner.v1.SaveCheckpointRequest
+	1,  // 10: learner.v1.LearnerService.PredictBatch:output_type -> learner.v1.PredictBatchResponse
+	3,  // 11: learner.v1.LearnerService.TrainBatch:output_type -> learner.v1.TrainBatchResponse
+	5,  // 12: learner.v1.LearnerService.HealthCheck:output_type -> learner.v1.HealthCheckResponse
+	7,  // 13: learner.v1.LearnerService.SaveCheckpoint:output_type -> learner.v1.SaveCheckpointResponse
+	10, // [10:14] is the sub-list for method output_type
+	6,  // [6:10] is the sub-list for method input_type
+	6,  // [6:6] is the sub-list for extension type_name
+	6,  // [6:6] is the sub-list for extension extendee
+	0,  // [0:6] is the sub-list for field type_name
 }
 
 func init() { file_learner_v1_learner_proto_init() }
@@ -485,7 +686,7 @@ func file_learner_v1_learner_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_learner_v1_learner_proto_rawDesc), len(file_learner_v1_learner_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   6,
+			NumMessages:   8,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

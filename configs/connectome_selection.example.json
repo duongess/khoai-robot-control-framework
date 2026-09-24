@@ -1,0 +1,18 @@
+{
+  "nodes": {
+    "body_ids": []
+  },
+  "input_groups": {
+    "sensory": {
+      "body_ids": []
+    }
+  },
+  "motor_groups": {
+    "front_left": { "body_ids": [] },
+    "front_right": { "body_ids": [] },
+    "middle_left": { "body_ids": [] },
+    "middle_right": { "body_ids": [] },
+    "hind_left": { "body_ids": [] },
+    "hind_right": { "body_ids": [] }
+  }
+}

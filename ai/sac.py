@@ -1,13 +1,16 @@
 """A minimal Soft Actor-Critic implementation for one-dimensional actions."""
 
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+from typing import Any
 
 import torch
 from torch import nn
 from torch.nn import functional as functional
 
 from ai.config import SACConfig
+from ai.connectome.graph import ConnectomeGraph
+from ai.connectome.policy import FlyConnectomePolicy, RandomGraphPolicy
 from ai.networks import Critic, GaussianActor
 
 
@@ -28,23 +31,48 @@ class SACAgent:
         self.device = torch.device("cpu")
         torch.manual_seed(config.seed)
 
-        self.actor = GaussianActor(config.state_dim, config.action_dim, config.hidden_dim).to(self.device)
+        self.actor = self._build_actor(config).to(self.device)
+        self.training_step = 0
         self.critic_one = Critic(config.state_dim, config.action_dim, config.hidden_dim).to(self.device)
         self.critic_two = Critic(config.state_dim, config.action_dim, config.hidden_dim).to(self.device)
         self.target_critic_one = deepcopy(self.critic_one).to(self.device)
         self.target_critic_two = deepcopy(self.critic_two).to(self.device)
 
-        self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=config.learning_rate)
+        self.actor_optimizer = self._build_actor_optimizer()
+        self._configure_actor_trainability()
         self.critic_one_optimizer = torch.optim.Adam(self.critic_one.parameters(), lr=config.learning_rate)
         self.critic_two_optimizer = torch.optim.Adam(self.critic_two.parameters(), lr=config.learning_rate)
         self.log_alpha = nn.Parameter(torch.zeros(1, device=self.device))
         self.alpha_optimizer = torch.optim.Adam([self.log_alpha], lr=config.learning_rate)
 
     def act(self, states: torch.Tensor, deterministic: bool = True) -> torch.Tensor:
+        """Evaluate the currently trainable actor."""
+        return self.act_with_actor(self.actor, states, deterministic=deterministic)
+
+    def act_with_actor(self, actor: nn.Module, states: torch.Tensor, deterministic: bool = True) -> torch.Tensor:
+        """Evaluate an immutable actor snapshot without touching live weights."""
         self._validate_states(states)
         with torch.no_grad():
-            actions, _ = self.actor.sample(states.to(self.device), deterministic=deterministic)
+            actions, _ = actor.sample(states.to(self.device), deterministic=deterministic)
         return actions.cpu()
+
+    def act_with_actor_components(
+        self,
+        actor: nn.Module,
+        states: torch.Tensor,
+        deterministic: bool = True,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Evaluate final, fly-base, and SAC-residual actions from one snapshot."""
+        self._validate_states(states)
+        with torch.no_grad():
+            device_states = states.to(self.device)
+            if hasattr(actor, "sample_decomposed"):
+                final, fly_base, residual, _ = actor.sample_decomposed(device_states, deterministic=deterministic)
+            else:
+                final, _ = actor.sample(device_states, deterministic=deterministic)
+                fly_base = torch.zeros_like(final)
+                residual = final
+        return final.cpu(), fly_base.cpu(), residual.cpu()
 
     def update(self, batch: TensorBatch) -> dict[str, float]:
         states, actions, rewards, next_states, dones = self._prepare_batch(batch)
@@ -72,19 +100,176 @@ class SACAgent:
 
         alpha_loss = -(self.log_alpha * (log_probability + self.config.target_entropy).detach()).mean()
         self._step_optimizer(self.alpha_optimizer, alpha_loss)
+        self.training_step += 1
+        self._configure_actor_trainability()
         self._soft_update_targets()
 
+        with torch.no_grad():
+            _, current_log_std = self.actor(states)
+            critic_one_q = self.critic_one(states, actions).mean()
+            critic_two_q = self.critic_two(states, actions).mean()
         return {
             "actor_loss": float(actor_loss.detach()),
             "alpha_loss": float(alpha_loss.detach()),
             "entropy": float((-log_probability).mean().detach()),
             "critic_one_loss": float(critic_one_loss.detach()),
             "critic_two_loss": float(critic_two_loss.detach()),
+            "critic_one_q": float(critic_one_q),
+            "critic_two_q": float(critic_two_q),
+            "alpha": float(self.alpha.detach()),
+            "actor_log_std_horizontal": float(current_log_std[:, 0].mean()),
+            "actor_log_std_vertical": float(current_log_std[:, 1].mean()) if self.config.action_dim > 1 else 0.0,
+            "actor_log_std_gripper": float(current_log_std[:, 2].mean()) if self.config.action_dim > 2 else 0.0,
         }
 
     @property
     def alpha(self) -> torch.Tensor:
         return self.log_alpha.exp()
+
+    def _build_actor_optimizer(self) -> torch.optim.Optimizer:
+        if self.config.controller_type not in {"fly_connectome", "random_graph"}:
+            return torch.optim.Adam(self.actor.parameters(), lr=self.config.learning_rate)
+        residual_parameters = list(self.actor.residual_head.parameters()) + [self.actor.log_std]
+        residual_ids = {id(parameter) for parameter in residual_parameters}
+        base_parameters = [parameter for parameter in self.actor.parameters() if id(parameter) not in residual_ids]
+        return torch.optim.Adam([
+            {"name": "fly_base", "params": base_parameters, "lr": self.config.learning_rate},
+            {"name": "sac_residual", "params": residual_parameters, "lr": self.config.learning_rate},
+        ])
+
+    def _configure_actor_trainability(self) -> None:
+        if self.config.controller_type != "fly_connectome":
+            return
+        unlocked = self.config.full_actor_unlock_step <= 0 or self.training_step >= self.config.full_actor_unlock_step
+        for parameter in self.actor.parameters():
+            parameter.requires_grad = unlocked
+
+        if not unlocked:
+            # Keep the topology and the motion backbone fixed while the policy
+            # learns only a decoder/residual head. This preserves the connectome
+            # priors while letting the SAC policy discover a safe low-level action
+            # readout before the full actor is unfrozen.
+            if hasattr(self.actor, "neuron_bias"):
+                self.actor.neuron_bias.requires_grad = False
+            if hasattr(self.actor, "leak_logit"):
+                self.actor.leak_logit.requires_grad = False
+            if hasattr(self.actor, "edge_log_gains"):
+                self.actor.edge_log_gains.requires_grad = False
+            if hasattr(self.actor, "sensory_encoder"):
+                for parameter in self.actor.sensory_encoder.parameters():
+                    parameter.requires_grad = True
+            if hasattr(self.actor, "latent_projection"):
+                for parameter in self.actor.latent_projection.parameters():
+                    parameter.requires_grad = True
+            if hasattr(self.actor, "base_head"):
+                for parameter in self.actor.base_head.parameters():
+                    parameter.requires_grad = True
+            if hasattr(self.actor, "residual_head"):
+                for parameter in self.actor.residual_head.parameters():
+                    parameter.requires_grad = True
+            if hasattr(self.actor, "motor_gain"):
+                self.actor.motor_gain.requires_grad = True
+            if hasattr(self.actor, "motor_bias"):
+                self.actor.motor_bias.requires_grad = True
+            if hasattr(self.actor, "transport_motor_gain"):
+                self.actor.transport_motor_gain.requires_grad = True
+            if hasattr(self.actor, "transport_motor_bias"):
+                self.actor.transport_motor_bias.requires_grad = True
+            if hasattr(self.actor, "log_std"):
+                self.actor.log_std.requires_grad = True
+
+        base_warmup = self.training_step < self.config.base_warmup_steps
+        for group in self.actor_optimizer.param_groups:
+            if group.get("name") == "fly_base":
+                group["lr"] = self.config.learning_rate if base_warmup else self.config.learning_rate * self.config.base_learning_rate_multiplier
+        if hasattr(self.actor, "residual_head"):
+            for parameter in self.actor.residual_head.parameters():
+                parameter.requires_grad = not base_warmup
+        if hasattr(self.actor, "log_std"):
+            self.actor.log_std.requires_grad = not base_warmup
+
+    def checkpoint_state(self) -> dict[str, Any]:
+        """Return every trainable SAC component needed for an exact resume."""
+        return {
+            "sac_config": asdict(self.config),
+            "actor": self.actor.state_dict(),
+            "critic_one": self.critic_one.state_dict(),
+            "critic_two": self.critic_two.state_dict(),
+            "target_critic_one": self.target_critic_one.state_dict(),
+            "target_critic_two": self.target_critic_two.state_dict(),
+            "actor_optimizer": self.actor_optimizer.state_dict(),
+            "critic_one_optimizer": self.critic_one_optimizer.state_dict(),
+            "critic_two_optimizer": self.critic_two_optimizer.state_dict(),
+            "alpha_optimizer": self.alpha_optimizer.state_dict(),
+            "log_alpha": self.log_alpha.detach().cpu().clone(),
+            "torch_rng_state": torch.get_rng_state(),
+        }
+
+    def load_checkpoint_state(self, state: dict[str, Any]) -> None:
+        """Restore a checkpoint created by :meth:`checkpoint_state` safely."""
+        expected_config = asdict(self.config)
+        if state.get("sac_config") != expected_config:
+            raise ValueError("checkpoint SAC configuration does not match the selected model")
+        required = (
+            "actor", "critic_one", "critic_two", "target_critic_one", "target_critic_two",
+            "actor_optimizer", "critic_one_optimizer", "critic_two_optimizer", "alpha_optimizer",
+            "log_alpha", "torch_rng_state",
+        )
+        if any(key not in state for key in required):
+            raise ValueError("checkpoint SAC state is incomplete")
+        log_alpha = state["log_alpha"]
+        if not isinstance(log_alpha, torch.Tensor) or log_alpha.shape != self.log_alpha.shape or not torch.isfinite(log_alpha).all():
+            raise ValueError("checkpoint contains an invalid entropy temperature")
+        try:
+            self.actor.load_state_dict(state["actor"])
+            self.critic_one.load_state_dict(state["critic_one"])
+            self.critic_two.load_state_dict(state["critic_two"])
+            self.target_critic_one.load_state_dict(state["target_critic_one"])
+            self.target_critic_two.load_state_dict(state["target_critic_two"])
+            self.actor_optimizer.load_state_dict(state["actor_optimizer"])
+            self.critic_one_optimizer.load_state_dict(state["critic_one_optimizer"])
+            self.critic_two_optimizer.load_state_dict(state["critic_two_optimizer"])
+            self.alpha_optimizer.load_state_dict(state["alpha_optimizer"])
+            self.log_alpha.data.copy_(log_alpha.to(self.device))
+            torch.set_rng_state(state["torch_rng_state"])
+        except (KeyError, RuntimeError, TypeError, ValueError) as error:
+            raise ValueError(f"could not restore SAC checkpoint state: {error}") from error
+
+    @staticmethod
+    def _build_actor(config: SACConfig) -> nn.Module:
+        if config.controller_type == "mlp":
+            return GaussianActor(config.state_dim, config.action_dim, config.hidden_dim, config.min_log_std)
+        graph = ConnectomeGraph.load(config.graph_path or "")
+        arguments = dict(
+            observation_dim=config.state_dim,
+            action_dim=config.action_dim,
+            graph=graph,
+            hidden_dim=config.hidden_dim,
+            propagation_steps=config.propagation_steps,
+            train_edge_gains=config.train_edge_gains,
+            activation=config.activation,
+            action_dead_zone=config.action_dead_zone,
+            min_log_std=config.min_log_std,
+            max_horizontal_speed=config.max_horizontal_speed,
+            max_vertical_speed=config.max_vertical_speed,
+            max_gripper_command=config.max_gripper_command,
+            phase_gated_decoder=config.phase_gated_decoder,
+            object_attached_observation_index=config.object_attached_observation_index,
+            phase_observation_index=config.phase_observation_index,
+            transport_phase_threshold=config.transport_phase_threshold,
+            residual_alpha=(config.residual_alpha_x, config.residual_alpha_y, config.residual_alpha_grip),
+            # Warmup scheduling is owned by SAC; the actor only owns inference.
+            tactile_observation_indices=(
+                config.slip_severity_observation_index,
+                config.grip_force_observation_index,
+                config.vertical_acceleration_observation_index,
+                config.previous_vertical_action_observation_index,
+            ),
+        )
+        if config.controller_type == "random_graph":
+            return RandomGraphPolicy(**arguments, seed=config.seed)
+            
+        return FlyConnectomePolicy(**arguments)
 
     def _prepare_batch(self, batch: TensorBatch) -> tuple[torch.Tensor, ...]:
         tensors = tuple(

@@ -25,6 +25,10 @@ type Runtime struct {
 	cancel         context.CancelFunc
 	done           chan struct{}
 	metrics        runtimeMetrics
+	// trainingInFlight prevents a fast environment loop from building an
+	// unbounded queue of expensive learner updates. Prediction remains on the
+	// control path; a later cycle schedules the next update after this one ends.
+	trainingInFlight bool
 	lastError      string
 }
 
@@ -87,7 +91,7 @@ func (r *Runtime) ReplaceTask(registration TaskRegistration) error {
 		if len(state) != registration.Descriptor.StateDimension {
 			return fmt.Errorf("replacement worker %d returned state dimension %d, want %d", worker.id, len(state), registration.Descriptor.StateDimension)
 		}
-		worker.task, worker.state, worker.episodeID, worker.episodeStep, worker.outcome = task, append(State(nil), state...), worker.episodeID+1, 0, OutcomeRunning
+		worker.task, worker.state, worker.episodeID, worker.episodeStep, worker.episodeReward, worker.lastInfo, worker.outcome = task, append(State(nil), state...), worker.episodeID+1, 0, 0, nil, OutcomeRunning
 	}
 	return nil
 }

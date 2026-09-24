@@ -18,6 +18,7 @@ type learnerServiceStub struct {
 	learnerv1.UnimplementedLearnerServiceServer
 	predictRequest *learnerv1.PredictBatchRequest
 	trainRequest   *learnerv1.TrainBatchRequest
+	saveRequest    *learnerv1.SaveCheckpointRequest
 }
 
 func (s *learnerServiceStub) HealthCheck(context.Context, *learnerv1.HealthCheckRequest) (*learnerv1.HealthCheckResponse, error) {
@@ -27,13 +28,20 @@ func (s *learnerServiceStub) HealthCheck(context.Context, *learnerv1.HealthCheck
 func (s *learnerServiceStub) PredictBatch(_ context.Context, request *learnerv1.PredictBatchRequest) (*learnerv1.PredictBatchResponse, error) {
 	s.predictRequest = request
 	return &learnerv1.PredictBatchResponse{
-		Actions: []*learnerv1.Action{{Values: []float32{0.5}}, {Values: []float32{0.5}}},
+		Actions:         []*learnerv1.Action{{Values: []float32{0.5}}, {Values: []float32{0.5}}},
+		FlyBaseActions:  []*learnerv1.Action{{Values: []float32{0.3}}, {Values: []float32{0.3}}},
+		ResidualActions: []*learnerv1.Action{{Values: []float32{0.2}}, {Values: []float32{0.2}}},
 	}, nil
 }
 
 func (s *learnerServiceStub) TrainBatch(_ context.Context, request *learnerv1.TrainBatchRequest) (*learnerv1.TrainBatchResponse, error) {
 	s.trainRequest = request
 	return &learnerv1.TrainBatchResponse{Accepted: true, SamplesSeen: uint64(len(request.Batch.Transitions)), PolicyVersion: 7}, nil
+}
+
+func (s *learnerServiceStub) SaveCheckpoint(_ context.Context, request *learnerv1.SaveCheckpointRequest) (*learnerv1.SaveCheckpointResponse, error) {
+	s.saveRequest = request
+	return &learnerv1.SaveCheckpointResponse{ModelName: "grasp-v1", PolicyVersion: 11, TrainingStep: 23}, nil
 }
 
 func TestLearnerClientHealthCheck(t *testing.T) {
@@ -51,15 +59,21 @@ func TestLearnerClientHealthCheck(t *testing.T) {
 func TestLearnerClientPredictBatchMapsStatesAndActions(t *testing.T) {
 	client, service := newTestLearnerClient(t)
 
-	prediction, err := client.PredictBatch(context.Background(), []State{{1, 2}, {3, 4}})
+	prediction, err := client.PredictBatch(context.Background(), []State{{1, 2}, {3, 4}}, 7)
 	if err != nil {
 		t.Fatalf("PredictBatch() error = %v", err)
 	}
 	if len(service.predictRequest.States) != 2 || service.predictRequest.States[0].Values[0] != 1 {
 		t.Fatalf("PredictBatch() request = %#v", service.predictRequest)
 	}
+	if service.predictRequest.PolicyVersion != 7 {
+		t.Fatalf("PredictBatch() requested policy version = %d, want 7", service.predictRequest.PolicyVersion)
+	}
 	if len(prediction.Actions) != 2 || prediction.Actions[0][0] != 0.5 || prediction.Actions[1][0] != 0.5 {
 		t.Fatalf("PredictBatch() actions = %#v", prediction.Actions)
+	}
+	if len(prediction.FlyBaseActions) != 2 || prediction.FlyBaseActions[0][0] != 0.3 || len(prediction.ResidualActions) != 2 || prediction.ResidualActions[0][0] != 0.2 {
+		t.Fatalf("PredictBatch() decomposition = base %#v residual %#v", prediction.FlyBaseActions, prediction.ResidualActions)
 	}
 }
 
@@ -82,6 +96,18 @@ func TestLearnerClientTrainBatchMapsTransition(t *testing.T) {
 	}
 	if !result.Accepted || result.SamplesSeen != 1 || result.PolicyVersion != 7 {
 		t.Fatalf("TrainBatch() result = %#v", result)
+	}
+}
+
+func TestLearnerClientSavesNamedCheckpoint(t *testing.T) {
+	client, _ := newTestLearnerClient(t)
+
+	result, err := client.SaveCheckpoint(context.Background())
+	if err != nil {
+		t.Fatalf("SaveCheckpoint() error = %v", err)
+	}
+	if result.ModelName != "grasp-v1" || result.PolicyVersion != 11 || result.TrainingStep != 23 {
+		t.Fatalf("SaveCheckpoint() result = %#v", result)
 	}
 }
 
