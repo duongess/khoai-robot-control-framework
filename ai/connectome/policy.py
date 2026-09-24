@@ -205,7 +205,32 @@ class FlyConnectomePolicy(nn.Module):
         gripper_y = observation[:, 1]
         carry_height_ready = gripper_y > torch.tensor(0.50, dtype=observation.dtype, device=observation.device)
 
+        # Decode the normalized phase from the environment observation. The Go
+        # environment exposes PhaseLowerAtTarget as 6 and PhaseReleaseObject as 7.
+        phase_available = observation.shape[1] > 19
+        phase = observation[:, 19] if phase_available else torch.zeros_like(err_x)
+        phase_has_signal = phase_available & (phase.abs() > 1e-6)
+        phase_code = torch.round((phase + 1.0) * torch.tensor(4.5, dtype=observation.dtype, device=observation.device)).to(torch.int64)
+
+        # Legacy observations without a meaningful phase channel are still safe:
+        # fall back to the same target-alignment geometry used before the phase-based
+        # gate was introduced, but keep the airborne release guard active.
+        target_tolerance = torch.tensor(0.05, dtype=observation.dtype, device=observation.device)
+        release_height = torch.tensor(0.30, dtype=observation.dtype, device=observation.device)
+        lower_target_geometry = attached & (torch.abs(err_target_x) <= target_tolerance) & (gripper_y > release_height)
+        release_geometry = attached & (torch.abs(err_target_x) <= target_tolerance) & (gripper_y <= release_height)
+
+        lower_target_mask = attached & ((phase_has_signal & (phase_code == 6)) | (~phase_has_signal & lower_target_geometry))
+        release_mask = (phase_has_signal & (phase_code >= 7)) | (~phase_has_signal & release_geometry)
+
+        # 1. Keep the carriage centered on the target in both the final lowering
+        # and release phases until the lateral error is reduced to a narrow landing
+        # tolerance. This prevents the gripper from freezing at the edge of the
+        # target and dropping the object onto the side slope.
         gain_x = torch.tensor(2.0, dtype=observation.dtype, device=observation.device)
+        target_centered = torch.abs(err_target_x) <= torch.tensor(0.03, dtype=observation.dtype, device=observation.device)
+        target_align_cmd = torch.clamp(gain_x * err_target_x, min=-1.0, max=1.0)
+
         x_track = -torch.clamp(gain_x * err_x, min=-1.0, max=1.0)
 
         # Only descend once the carriage is already horizontally close enough to
@@ -216,18 +241,27 @@ class FlyConnectomePolicy(nn.Module):
 
         # Post-grasp reflex cascade: lift first while attached but still below the
         # safe carry height, then transport horizontally to the target while holding
-        # the carriage at carry height. This keeps the base controller active even
-        # after contact is established and prevents SAC from bearing the entire lift
-        # burden through a tiny residual action.
+        # the carriage at carry height. Once the target phase is reached, the base
+        # descends to the release guide and keeps the jaws closed until the
+        # environment has advanced into the explicit release phase. This prevents
+        # a free-fall drop while the object is still airborne.
         lift_mask = attached & ~carry_height_ready
         transport_mask = attached & carry_height_ready
+
         x_track = torch.where(lift_mask, torch.zeros_like(x_track), x_track)
-        x_track = torch.where(transport_mask, torch.clamp(gain_x * err_target_x, min=-1.0, max=1.0), x_track)
+        x_track = torch.where(transport_mask, target_align_cmd, x_track)
+        x_track = torch.where(lower_target_mask, torch.where(target_centered, torch.zeros_like(x_track), target_align_cmd), x_track)
+        x_track = torch.where(release_mask, torch.where(target_centered, torch.zeros_like(x_track), target_align_cmd), x_track)
+
         y_track = torch.where(lift_mask, torch.full_like(err_x, 0.85), y_track)
         y_track = torch.where(transport_mask, torch.zeros_like(err_x), y_track)
+        y_track = torch.where(lower_target_mask, torch.where(target_centered, torch.full_like(err_x, -0.75), torch.zeros_like(err_x)), y_track)
+        y_track = torch.where(release_mask, torch.full_like(err_x, -0.3), y_track)
 
         grip_baseline = torch.where(attached, torch.full_like(dx, 0.90), torch.zeros_like(dx))
         grip_baseline = torch.where(contact & ~attached, torch.full_like(dx, 0.9), grip_baseline)
+        grip_baseline = torch.where(lower_target_mask, torch.full_like(dx, 0.90), grip_baseline)
+        grip_baseline = torch.where(release_mask, torch.full_like(dx, -1.0), grip_baseline)
 
         base[:, 0] = x_track
         base[:, 1] = y_track
@@ -258,6 +292,21 @@ class FlyConnectomePolicy(nn.Module):
         raw_residual = residual_mean if deterministic else distribution.rsample()
         sac_residual = torch.tanh(raw_residual)
         final = torch.clamp(fly_base + self.residual_alpha * sac_residual, -1.0, 1.0)
+        # During release, the plant checks that the object remains inside the
+        # target after the movement command. A residual correction can move it
+        # out of the target before the release command is evaluated. Keep the
+        # fly-base position command for this short safety window and never let
+        # SAC reverse the downward release command. SAC keeps full authority
+        # outside release.
+        if observation.shape[1] > 19:
+            release_phase = observation[:, 19] >= (7.0 / 4.5 - 1.0)
+            release_horizontal = torch.where(release_phase, fly_base[:, 0], final[:, 0])
+            release_vertical = torch.minimum(final[:, 1], fly_base[:, 1])
+            release_vertical = torch.where(release_phase, release_vertical, final[:, 1])
+            # Build a new tensor instead of assigning through final[:, index].
+            # In-place view writes invalidate SAC autograd versions during the
+            # actor update.
+            final = torch.stack((release_horizontal, release_vertical, final[:, 2]), dim=1)
         if deterministic:
             log_probability = torch.zeros((len(final), 1), dtype=final.dtype, device=final.device)
         else:

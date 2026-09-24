@@ -208,6 +208,59 @@ def test_fly_base_raises_lift_and_transport_after_attachment(tmp_path) -> None:
     assert high_base[0, 2] > 0.8
 
 
+def test_fly_base_descends_and_releases_near_target(tmp_path) -> None:
+    policy = FlyConnectomePolicy(
+        30,
+        3,
+        _graph(tmp_path),
+        hidden_dim=8,
+        residual_alpha=(0.0, 0.0, 0.0),
+        tactile_observation_indices=(17, 16, 18, 26),
+    )
+    ready_to_lower = torch.zeros((1, 30), dtype=torch.float32)
+    ready_to_lower[:, 1] = 0.70
+    ready_to_lower[:, 12] = 0.02
+    ready_to_lower[:, 15] = 1.0
+
+    ready_to_release = torch.zeros((1, 30), dtype=torch.float32)
+    ready_to_release[:, 1] = 0.15
+    ready_to_release[:, 12] = 0.02
+    ready_to_release[:, 15] = 1.0
+
+    _, lower_base, _, _ = policy.sample_decomposed(ready_to_lower, deterministic=True)
+    _, release_base, _, _ = policy.sample_decomposed(ready_to_release, deterministic=True)
+
+    assert lower_base[0, 1] < 0.0
+    assert lower_base[0, 2] > 0.8
+    assert release_base[0, 2] < 0.0
+    assert release_base[0, 1] == pytest.approx(-0.3, abs=1e-6)
+
+
+def test_fly_base_uses_phase_state_for_release_gate(tmp_path) -> None:
+    policy = FlyConnectomePolicy(
+        30,
+        3,
+        _graph(tmp_path),
+        hidden_dim=8,
+        residual_alpha=(0.0, 0.15, 0.20),
+        tactile_observation_indices=(17, 16, 18, 26),
+    )
+    with torch.no_grad():
+        policy.residual_head[-1].bias.copy_(torch.tensor([10.0, 10.0, 10.0]))
+    phase_release_high = torch.zeros((1, 30), dtype=torch.float32)
+    phase_release_high[:, 1] = 0.70
+    phase_release_high[:, 12] = 0.02
+    phase_release_high[:, 15] = -1.0  # released; still settling in PhaseReleaseObject
+    phase_release_high[:, 19] = 7.0 / 4.5 - 1.0
+
+    final, release_base, _, _ = policy.sample_decomposed(phase_release_high, deterministic=True)
+
+    assert release_base[0, 2] < 0.0
+    assert release_base[0, 1] == pytest.approx(-0.3, abs=1e-6)
+    assert torch.allclose(final[0, 0], release_base[0, 0])
+    assert final[0, 1].item() < 0.0
+
+
 def test_tactile_slip_changes_residual_grip_without_changing_fly_base(tmp_path) -> None:
     policy = FlyConnectomePolicy(
         4,
