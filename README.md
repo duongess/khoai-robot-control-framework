@@ -52,6 +52,7 @@ LEARNER_CONTROLLER=mlp poetry run python -m ai
 # Biological topology baseline
 LEARNER_CONTROLLER=fly_connectome \
 LEARNER_GRAPH_PATH=data/connectome/connectome_graph.npz \
+LEARNER_BASE_POLICY=connectome \
 LEARNER_PROPAGATION_STEPS=4 LEARNER_TRAIN_EDGE_GAINS=true \
 LEARNER_PHASE_GATED_DECODER=true \
 LEARNER_OBJECT_ATTACHED_OBSERVATION_INDEX=15 \
@@ -114,7 +115,7 @@ transitions can be incompatible after an environment or reward change.
 
 The force-control task supplies a 30-value observation. It passes through the
 connectome sensory encoder and sparse graph to one shared latent. A learned
-fly-base head emits the nominal three-axis reflex; a SAC head receives the same
+connectome base head emits the nominal three-axis action; SAC receives the same
 latent plus normalized slip severity (17), grip force (16), vertical
 acceleration (18), and previous vertical action (26). The learner returns all
 three vectors in one snapshot:
@@ -123,7 +124,8 @@ three vectors in one snapshot:
 a_final = clamp(a_fly_base + alpha * delta_a_sac, -1, 1)
 ```
 
-The default normalized alpha is `[0.20, 0.15, 0.30]`. The grip value is kept
+The default normalized alpha is `[0.20, 0.15, 0.30]`. Set `base_policy: connectome` (the default for graph controllers) to make the sparse graph plus learned base head produce the nominal action; set `base_policy: closed_loop` only for the legacy geometry-reflex ablation.
+The grip value is kept
 normalized because the Go task owns unit conversion and the material safety
 limit; with its default 12 N/s actuator, `0.30` is approximately `3.6 N/s` of
 residual authority. For the first `LEARNER_BASE_WARMUP_STEPS` gradient updates
@@ -141,7 +143,8 @@ Required graph readout groups are `front_left`, `front_right`, `middle_left`,
 `middle_right`, `hind_left`, and `hind_right`. Their six mean activities are
 projected into the shared latent; the learned base/residual heads—not a
 hard-coded antagonist or FSM mapping—produce the production action. The old
-left/right difference decoder remains only as a diagnostic helper in tests.
+left/right difference decoder remains only as a diagnostic helper in tests. The
+geometry reflex is not part of the default connectome path.
 
 Both heads use tanh and preserve the existing continuous three-value action
 contract: left/right, down/up, and signed grip-force rate. The Go environment

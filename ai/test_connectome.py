@@ -126,6 +126,28 @@ def test_dual_loop_actor_exposes_exact_base_residual_composition(tmp_path) -> No
     assert torch.allclose(final, expected)
     assert torch.isfinite(final).all()
 
+def test_connectome_base_head_is_nominal_and_geometry_independent(tmp_path) -> None:
+    policy = FlyConnectomePolicy(
+        30,
+        3,
+        _graph(tmp_path),
+        hidden_dim=8,
+        residual_alpha=(0.0, 0.0, 0.0),
+        tactile_observation_indices=(17, 16, 18, 26),
+    )
+    with torch.no_grad():
+        policy.base_head[0].weight.zero_()
+        policy.base_head[0].bias.copy_(torch.tensor([0.25, -0.40, 0.60]))
+    observations = torch.zeros((2, 30), dtype=torch.float32)
+    observations[0, 10] = 0.80
+    observations[1, 10] = -0.80
+
+    _, fly_base, _, _ = policy.sample_decomposed(observations, deterministic=True)
+
+    expected = torch.tanh(torch.tensor([0.25, -0.40, 0.60]))
+    assert torch.allclose(fly_base[0], expected)
+    assert torch.allclose(fly_base[1], expected)
+
 
 def test_fly_base_tracks_object_with_signed_closed_loop_reflex(tmp_path) -> None:
     policy = FlyConnectomePolicy(
@@ -133,6 +155,7 @@ def test_fly_base_tracks_object_with_signed_closed_loop_reflex(tmp_path) -> None
         3,
         _graph(tmp_path),
         hidden_dim=8,
+        base_policy="closed_loop",
         residual_alpha=(0.0, 0.0, 0.0),
         tactile_observation_indices=(17, 16, 18, 26),
     )
@@ -164,6 +187,7 @@ def test_fly_base_is_pure_per_step_closed_loop_reflex(tmp_path) -> None:
         3,
         _graph(tmp_path),
         hidden_dim=8,
+        base_policy="closed_loop",
         residual_alpha=(0.0, 0.0, 0.0),
         tactile_observation_indices=(17, 16, 18, 26),
     )
@@ -186,6 +210,7 @@ def test_fly_base_raises_lift_and_transport_after_attachment(tmp_path) -> None:
         3,
         _graph(tmp_path),
         hidden_dim=8,
+        base_policy="closed_loop",
         residual_alpha=(0.0, 0.0, 0.0),
         tactile_observation_indices=(17, 16, 18, 26),
     )
@@ -214,6 +239,7 @@ def test_fly_base_descends_and_releases_near_target(tmp_path) -> None:
         3,
         _graph(tmp_path),
         hidden_dim=8,
+        base_policy="closed_loop",
         residual_alpha=(0.0, 0.0, 0.0),
         tactile_observation_indices=(17, 16, 18, 26),
     )
@@ -242,6 +268,7 @@ def test_fly_base_uses_phase_state_for_release_gate(tmp_path) -> None:
         3,
         _graph(tmp_path),
         hidden_dim=8,
+        base_policy="closed_loop",
         residual_alpha=(0.0, 0.15, 0.20),
         tactile_observation_indices=(17, 16, 18, 26),
     )
@@ -318,9 +345,9 @@ def test_phase_gated_decoder_uses_transport_head_only_after_attachment(tmp_path)
 
 def test_graph_actor_trains_one_sac_step_without_neuprint(tmp_path) -> None:
     graph = _graph(tmp_path)
-    agent = SACAgent(SACConfig(state_dim=3, action_dim=3, hidden_dim=8, controller_type="fly_connectome", graph_path=str(tmp_path / "connectome_graph.npz"), seed=3))
+    agent = SACAgent(SACConfig(state_dim=30, action_dim=3, hidden_dim=8, controller_type="fly_connectome", graph_path=str(tmp_path / "connectome_graph.npz"), seed=3))
     batch = TensorBatch(
-        states=torch.zeros((4, 3)), actions=torch.zeros((4, 3)), rewards=torch.ones((4, 1)), next_states=torch.ones((4, 3)), dones=torch.zeros((4, 1)),
+        states=torch.zeros((4, 30)), actions=torch.zeros((4, 3)), rewards=torch.ones((4, 1)), next_states=torch.ones((4, 30)), dones=torch.zeros((4, 1)),
     )
     metrics = agent.update(batch)
     assert {"actor_loss", "alpha_loss", "entropy", "critic_one_loss", "critic_two_loss", "critic_one_q", "critic_two_q", "alpha", "actor_log_std_horizontal", "actor_log_std_vertical", "actor_log_std_gripper"}.issubset(metrics)

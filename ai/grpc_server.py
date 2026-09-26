@@ -81,6 +81,7 @@ class LearnerServicer(learner_pb2_grpc.LearnerServiceServicer):
             gamma=self._config.gamma,
             target_entropy=-float(self._config.action_dim),
             controller_type=self._config.controller_type,
+            base_policy=self._config.base_policy,
             graph_path=self._config.graph_path,
             propagation_steps=self._config.propagation_steps,
             train_edge_gains=self._config.train_edge_gains,

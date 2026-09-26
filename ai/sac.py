@@ -244,6 +244,7 @@ class SACAgent:
             observation_dim=config.state_dim,
             action_dim=config.action_dim,
             graph=graph,
+            base_policy=config.base_policy,
             hidden_dim=config.hidden_dim,
             propagation_steps=config.propagation_steps,
             train_edge_gains=config.train_edge_gains,

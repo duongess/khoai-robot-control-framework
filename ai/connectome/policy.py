@@ -25,8 +25,10 @@ class FlyConnectomePolicy(nn.Module):
     """Dual-loop actor whose shared latent propagates over cached graph edges.
 
     Observation features are encoded into an explicitly configured sensory group;
-    they are never injected into a motor group. A deterministic fly-base branch
-    supplies the nominal reflex and SAC samples only the tactile residual branch.
+    they are never injected into a motor group. In connectome mode the graph
+    latent drives the nominal action through the learned base head, while SAC
+    samples only the residual branch. The old geometry reflex is an explicit
+    closed_loop baseline only.
     """
 
     def __init__(
@@ -35,6 +37,7 @@ class FlyConnectomePolicy(nn.Module):
         action_dim: int,
         graph: ConnectomeGraph,
         hidden_dim: int = 64,
+        base_policy: str = "connectome",
         propagation_steps: int = 4,
         train_edge_gains: bool = True,
         activation: str = "tanh",
@@ -58,6 +61,8 @@ class FlyConnectomePolicy(nn.Module):
             raise ValueError("dual-loop fly actor requires exactly three action channels")
         if activation not in {"tanh", "hardtanh"}:
             raise ValueError("activation must be tanh or hardtanh")
+        if base_policy not in {"connectome", "closed_loop"}:
+            raise ValueError("base_policy must be connectome or closed_loop")
         if not 0 <= action_dead_zone < 1:
             raise ValueError("action_dead_zone must be in [0, 1)")
         if min(max_horizontal_speed, max_vertical_speed, max_gripper_command) <= 0:
@@ -89,6 +94,7 @@ class FlyConnectomePolicy(nn.Module):
         self.node_count = graph.node_count
         self.propagation_steps = propagation_steps
         self.action_dead_zone = action_dead_zone
+        self.base_policy = base_policy
         self.min_log_std = min_log_std
         self.phase_gated_decoder = phase_gated_decoder
         self.object_attached_observation_index = object_attached_observation_index
@@ -280,7 +286,10 @@ class FlyConnectomePolicy(nn.Module):
         by the critics. This preserves the existing action-space contract.
         """
         latent = self._connectome_latent(observation)
-        fly_base = self._closed_loop_base_reflex(observation)
+        if self.base_policy == "connectome":
+            fly_base = self.base_head(latent)
+        else:
+            fly_base = self._closed_loop_base_reflex(observation)
         tactile_columns = [
             observation[:, index] if index >= 0 else observation.new_zeros(len(observation))
             for index in self.tactile_observation_indices.tolist()

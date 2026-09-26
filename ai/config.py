@@ -25,6 +25,8 @@ class SACConfig:
     target_entropy: float = -3.0
     seed: int = 0
     controller_type: str = "mlp"
+    # connectome uses the graph motor readout as the nominal action; closed_loop is the legacy geometry baseline.
+    base_policy: str = "connectome"
     graph_path: str | None = None
     propagation_steps: int = 4
     train_edge_gains: bool = True
@@ -71,6 +73,8 @@ class SACConfig:
             raise ValueError("gamma must be in (0, 1)")
         if self.controller_type not in {"mlp", "fly_connectome", "random_graph"}:
             raise ValueError("controller_type must be mlp, fly_connectome, or random_graph")
+        if self.base_policy not in {"connectome", "closed_loop"}:
+            raise ValueError("base_policy must be connectome or closed_loop")
         if self.controller_type != "mlp" and not self.graph_path:
             raise ValueError("graph_path is required for graph controllers")
         if self.graph_path and self.controller_type != "mlp" and not Path(self.graph_path).is_file():
@@ -115,6 +119,7 @@ class LearnerConfig:
     state_dim: int = 30
     action_dim: int = 3
     controller_type: str = "mlp"
+    base_policy: str = "connectome"
     graph_path: str | None = None
     propagation_steps: int = 4
     train_edge_gains: bool = True
@@ -170,6 +175,8 @@ class LearnerConfig:
             raise ValueError("log_every_n_requests must be positive")
         if not self.checkpoint_dir.strip():
             raise ValueError("checkpoint_dir must not be empty")
+        if self.base_policy not in {"connectome", "closed_loop"}:
+            raise ValueError("base_policy must be connectome or closed_loop")
         if self.full_actor_unlock_step < 0:
             raise ValueError("full_actor_unlock_step must be non-negative")
         if any(value < 0 or value > 1 for value in (self.residual_alpha_x, self.residual_alpha_y, self.residual_alpha_grip)):
@@ -207,6 +214,7 @@ class LearnerConfig:
                 state_dim=int(os.environ.get("LEARNER_STATE_DIM", "30")),
                 action_dim=int(os.environ.get("LEARNER_ACTION_DIM", "3")),
                 controller_type=controller_type,
+                base_policy=os.environ.get("LEARNER_BASE_POLICY", "connectome" if controller_type in {"fly_connectome", "random_graph"} else "closed_loop"),
                 graph_path=graph_path,
                 propagation_steps=int(os.environ.get("LEARNER_PROPAGATION_STEPS", "4")),
                 train_edge_gains=os.environ.get("LEARNER_TRAIN_EDGE_GAINS", "true").lower() == "true",
