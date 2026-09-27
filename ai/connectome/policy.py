@@ -379,3 +379,7 @@ class RandomGraphPolicy(FlyConnectomePolicy):
 
     def __init__(self, *args, graph: ConnectomeGraph, seed: int = 0, **kwargs) -> None:
         super().__init__(*args, graph=graph.randomized(seed), **kwargs)
+
+
+# Registers the opt-in Web/API reflex schema on FlyConnectomePolicy.
+from ai.connectome import dynamic_policy as _dynamic_policy

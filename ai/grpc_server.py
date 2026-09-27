@@ -18,6 +18,7 @@ import torch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "gen" / "python"))
 
 from ai.config import LearnerConfig, SACConfig
+from ai.connectome.dynamic_policy import DEFAULT_GANTRY_REFLEX_CONFIG
 from ai.checkpoints import (
     CHECKPOINT_FORMAT_VERSION,
     atomic_save_checkpoint,
@@ -107,6 +108,10 @@ class LearnerServicer(learner_pb2_grpc.LearnerServiceServicer):
             vertical_acceleration_observation_index=self._config.vertical_acceleration_observation_index,
             previous_vertical_action_observation_index=self._config.previous_vertical_action_observation_index,
         ))
+        # A new graph learner must never silently serve the legacy residual actor.
+        # Checkpoints restore their own persisted schema in _restore_checkpoint.
+        if payload is None and self._config.controller_type in {"fly_connectome", "random_graph"}:
+            self._agent.register_reflex_law(DEFAULT_GANTRY_REFLEX_CONFIG)
         self._samples_seen = 0
         # Version zero is reserved by the protocol for "latest". Every actual
         # episode therefore receives a positive, immutable snapshot ID.
@@ -122,6 +127,11 @@ class LearnerServicer(learner_pb2_grpc.LearnerServiceServicer):
         self._train_requests = 0
         if payload is not None:
             self._restore_checkpoint(payload, checkpoint)
+            # Legacy checkpoints predate the registry. Upgrade them at boot
+            # rather than reviving the residual branch for a new episode.
+            if self._config.controller_type in {"fly_connectome", "random_graph"} and not self._agent.actor.reflex_parameter_count:
+                self._agent.register_reflex_law(DEFAULT_GANTRY_REFLEX_CONFIG)
+                self._actor_snapshots = {self._policy_version: deepcopy(self._agent.actor).eval()}
 
     def PredictBatch(self, request, context):
         try:

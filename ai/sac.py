@@ -33,6 +33,7 @@ class SACAgent:
 
         self.actor = self._build_actor(config).to(self.device)
         self.training_step = 0
+        self.target_entropy = config.target_entropy
         self.critic_one = Critic(config.state_dim, config.action_dim, config.hidden_dim).to(self.device)
         self.critic_two = Critic(config.state_dim, config.action_dim, config.hidden_dim).to(self.device)
         self.target_critic_one = deepcopy(self.critic_one).to(self.device)
@@ -44,6 +45,17 @@ class SACAgent:
         self.critic_two_optimizer = torch.optim.Adam(self.critic_two.parameters(), lr=config.learning_rate)
         self.log_alpha = nn.Parameter(torch.zeros(1, device=self.device))
         self.alpha_optimizer = torch.optim.Adam([self.log_alpha], lr=config.learning_rate)
+
+    def register_reflex_law(self, config_dict: dict[str, Any]) -> dict[str, Any]:
+        """Switch this graph actor to parameter-space SAC for a registered law."""
+        if not isinstance(self.actor, FlyConnectomePolicy):
+            raise ValueError("Parametric SAC requires a fly_connectome or random_graph actor")
+        registered = self.actor.register_reflex_law(config_dict)
+        # The parameter head changes shape, so retain no stale optimizer slots.
+        self.actor_optimizer = self._build_actor_optimizer()
+        self.target_entropy = -float(self.actor.reflex_parameter_count)
+        self._configure_actor_trainability()
+        return registered
 
     def act(self, states: torch.Tensor, deterministic: bool = True) -> torch.Tensor:
         """Evaluate the currently trainable actor."""
@@ -98,7 +110,7 @@ class SACAgent:
         actor_loss = (self.alpha.detach() * log_probability - actor_q).mean()
         self._step_optimizer(self.actor_optimizer, actor_loss)
 
-        alpha_loss = -(self.log_alpha * (log_probability + self.config.target_entropy).detach()).mean()
+        alpha_loss = -(self.log_alpha * (log_probability + self.target_entropy).detach()).mean()
         self._step_optimizer(self.alpha_optimizer, alpha_loss)
         self.training_step += 1
         self._configure_actor_trainability()
@@ -117,9 +129,9 @@ class SACAgent:
             "critic_one_q": float(critic_one_q),
             "critic_two_q": float(critic_two_q),
             "alpha": float(self.alpha.detach()),
-            "actor_log_std_horizontal": float(current_log_std[:, 0].mean()),
-            "actor_log_std_vertical": float(current_log_std[:, 1].mean()) if self.config.action_dim > 1 else 0.0,
-            "actor_log_std_gripper": float(current_log_std[:, 2].mean()) if self.config.action_dim > 2 else 0.0,
+            "actor_log_std_horizontal": float(current_log_std[:, 0].mean()) if current_log_std.shape[1] > 0 else 0.0,
+            "actor_log_std_vertical": float(current_log_std[:, 1].mean()) if current_log_std.shape[1] > 1 else 0.0,
+            "actor_log_std_gripper": float(current_log_std[:, 2].mean()) if current_log_std.shape[1] > 2 else 0.0,
         }
 
     @property
@@ -127,6 +139,8 @@ class SACAgent:
         return self.log_alpha.exp()
 
     def _build_actor_optimizer(self) -> torch.optim.Optimizer:
+        if getattr(self.actor, "reflex_parameter_count", 0):
+            return torch.optim.Adam(self.actor.parameters(), lr=self.config.learning_rate)
         if self.config.controller_type not in {"fly_connectome", "random_graph"}:
             return torch.optim.Adam(self.actor.parameters(), lr=self.config.learning_rate)
         residual_parameters = list(self.actor.residual_head.parameters()) + [self.actor.log_std]
@@ -187,6 +201,10 @@ class SACAgent:
                 parameter.requires_grad = not base_warmup
         if hasattr(self.actor, "log_std"):
             self.actor.log_std.requires_grad = not base_warmup
+        if getattr(self.actor, "reflex_parameter_count", 0):
+            for parameter in self.actor.parameter_head.parameters():
+                parameter.requires_grad = True
+            self.actor.parameter_log_std.requires_grad = True
 
     def checkpoint_state(self) -> dict[str, Any]:
         """Return every trainable SAC component needed for an exact resume."""
@@ -221,7 +239,13 @@ class SACAgent:
         if not isinstance(log_alpha, torch.Tensor) or log_alpha.shape != self.log_alpha.shape or not torch.isfinite(log_alpha).all():
             raise ValueError("checkpoint contains an invalid entropy temperature")
         try:
-            self.actor.load_state_dict(state["actor"])
+            actor_state = state["actor"]
+            dynamic_state = actor_state.get("_extra_state") if isinstance(actor_state, dict) else None
+            if isinstance(dynamic_state, dict) and dynamic_state.get("reflex_config") is not None:
+                self.actor.register_reflex_law(dynamic_state["reflex_config"])
+                self.actor_optimizer = self._build_actor_optimizer()
+                self.target_entropy = -float(self.actor.reflex_parameter_count)
+            self.actor.load_state_dict(actor_state)
             self.critic_one.load_state_dict(state["critic_one"])
             self.critic_two.load_state_dict(state["critic_two"])
             self.target_critic_one.load_state_dict(state["target_critic_one"])
