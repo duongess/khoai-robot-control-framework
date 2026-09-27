@@ -153,9 +153,10 @@ class ReflexFunctionConfig:
 class DynamicReflexEngine:
     """Compile and evaluate template or safely parsed custom reflex laws."""
 
-    SUPPORTED_TYPES = frozenset({"linear", "saturated_linear", "impedance_pd", "custom_eval"})
+    SUPPORTED_TYPES = frozenset({"linear", "positive_linear", "saturated_linear", "impedance_pd", "custom_eval"})
     _TEMPLATES = {
         "linear": "-a * x + b",
+        "positive_linear": "a * x + b",
         "saturated_linear": "c * tanh(-a * x + b)",
         "impedance_pd": "-kp * err - kd * vel + bias",
     }

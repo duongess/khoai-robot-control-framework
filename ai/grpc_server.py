@@ -33,6 +33,21 @@ from gen.python.learner.v1 import environment_pb2, learner_pb2, learner_pb2_grpc
 ADDRESS = "127.0.0.1:50051"
 
 
+def _upgrade_legacy_default_grip(config: object) -> dict | None:
+    """Replace only the obsolete default grip channel in persisted registries."""
+    if not isinstance(config, dict) or not isinstance(config.get("channels"), list):
+        return None
+    updated = deepcopy(config)
+    for index, channel in enumerate(updated["channels"]):
+        if not isinstance(channel, dict) or channel.get("action_index") != 2:
+            continue
+        signals = channel.get("signal_indices")
+        if channel.get("expression_type") == "linear" and isinstance(signals, dict) and signals.get("x") == 17:
+            updated["channels"][index] = deepcopy(DEFAULT_GANTRY_REFLEX_CONFIG["channels"][2])
+            return updated
+    return None
+
+
 class JsonFormatter(logging.Formatter):
     """Formats learner events as concise JSON log records."""
 
@@ -129,9 +144,15 @@ class LearnerServicer(learner_pb2_grpc.LearnerServiceServicer):
             self._restore_checkpoint(payload, checkpoint)
             # Legacy checkpoints predate the registry. Upgrade them at boot
             # rather than reviving the residual branch for a new episode.
-            if self._config.controller_type in {"fly_connectome", "random_graph"} and not self._agent.actor.reflex_parameter_count:
-                self._agent.register_reflex_law(DEFAULT_GANTRY_REFLEX_CONFIG)
-                self._actor_snapshots = {self._policy_version: deepcopy(self._agent.actor).eval()}
+            if self._config.controller_type in {"fly_connectome", "random_graph"}:
+                if not self._agent.actor.reflex_parameter_count:
+                    self._agent.register_reflex_law(DEFAULT_GANTRY_REFLEX_CONFIG)
+                    self._actor_snapshots = {self._policy_version: deepcopy(self._agent.actor).eval()}
+                else:
+                    migrated = _upgrade_legacy_default_grip(self._agent.actor.get_extra_state().get("reflex_config"))
+                    if migrated is not None:
+                        self._agent.register_reflex_law(migrated)
+                        self._actor_snapshots = {self._policy_version: deepcopy(self._agent.actor).eval()}
 
     def PredictBatch(self, request, context):
         try:

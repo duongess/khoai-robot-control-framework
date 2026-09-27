@@ -20,10 +20,10 @@ DEFAULT_GANTRY_REFLEX_CONFIG: dict[str, Any] = {
     "channels": [
         {"action_index": 0, "expression_type": "linear", "signal_indices": {"x": 10}, "parameters": [{"name": "a", "min_val": 0.5, "max_val": 3.0, "default": 2.0}, {"name": "b", "min_val": -0.5, "max_val": 0.5, "default": 0.0}]},
         {"action_index": 1, "expression_type": "linear", "signal_indices": {"x": 11}, "parameters": [{"name": "a", "min_val": 0.5, "max_val": 2.0, "default": 1.0}, {"name": "b", "min_val": -0.8, "max_val": -0.3, "default": -0.5}]},
-        {"action_index": 2, "expression_type": "linear", "signal_indices": {"x": 17}, "parameters": [{"name": "a", "min_val": -2.0, "max_val": -0.1, "default": -1.0}, {"name": "b", "min_val": 0.0, "max_val": 0.4, "default": 0.1}]},
+        {"action_index": 2, "expression_type": "positive_linear", "signal_indices": {"x": 20}, "parameters": [{"name": "a", "min_val": 0.5, "max_val": 2.0, "default": 1.0}, {"name": "b", "min_val": 0.0, "max_val": 1.0, "default": 0.5}]},
     ]
 }
-_DEFAULT_GANTRY_SIGNAL_INDICES = {0: 10, 1: 11, 2: 17}
+_DEFAULT_GANTRY_SIGNAL_INDICES = {0: 10, 1: 11, 2: 20}
 
 
 @dataclass
@@ -164,6 +164,60 @@ def _evaluate_reflex(policy: FlyConnectomePolicy, observation: torch.Tensor, par
     return torch.stack([by_action.get(index, observation.new_zeros(len(observation))) for index in range(policy.action_dim)], dim=1).clamp(-1.0, 1.0)
 
 
+def _uses_default_gantry_task_flow(policy: FlyConnectomePolicy) -> bool:
+    """True only for the canonical three-channel gantry schema."""
+    state = _state(policy)
+    if state is None or len(state.config.channels) != 3:
+        return False
+    expected = ((0, "linear", 10), (1, "linear", 11), (2, "positive_linear", 20))
+    return all(
+        (channel.action_index if channel.action_index is not None else index, channel.expression_type, channel.signal_indices.get("x")) == item
+        for index, (channel, item) in enumerate(zip(state.config.channels, expected, strict=True))
+    )
+
+
+def _apply_gantry_task_flow(
+    observation: torch.Tensor, action: torch.Tensor, parameters: Mapping[str, torch.Tensor]
+) -> torch.Tensor:
+    """Phase orchestration around parametric reflexes for pick, carry, and drop.
+
+    Registered theta values remain gains and biases; phase selects the physical
+    error and enforces the safe lift and release directions.
+    """
+    if observation.shape[1] <= 20:
+        return action
+    err_target_x = observation[:, 12]
+    gripper_y = observation[:, 1]
+    attached = observation[:, 15] > 0.5
+    phase_code = torch.round((observation[:, 19] + 1.0) * 4.5).to(torch.int64)
+    carry_ready = gripper_y > 0.50
+    lift = attached & ~carry_ready
+    lower_at_target = attached & (phase_code == 6)
+    release = phase_code >= 7
+    transport = attached & carry_ready & ~lower_at_target & ~release
+
+    ax, bx = parameters["channel_0.a"], parameters["channel_0.b"]
+    ay, by = parameters["channel_1.a"], parameters["channel_1.b"]
+    ag, bg = parameters["channel_2.a"], parameters["channel_2.b"]
+    target_x = (ax * err_target_x + bx).clamp(-1.0, 1.0)
+    lift_y = (ay + by).clamp(min=0.35, max=1.0)
+    lower_y = (-ay + by).clamp(min=-1.0, max=-0.35)
+    release_y = (-ay + by).clamp(min=-1.0, max=-0.30)
+    hold_grip = torch.maximum(action[:, 2], torch.full_like(action[:, 2], 0.50))
+    open_grip = (-(ag + bg)).clamp(-1.0, -0.50)
+
+    x, y, grip = action.unbind(dim=1)
+    x = torch.where(lift, torch.zeros_like(x), x)
+    x = torch.where(transport | lower_at_target | release, target_x, x)
+    y = torch.where(lift, lift_y, y)
+    y = torch.where(transport, torch.zeros_like(y), y)
+    y = torch.where(lower_at_target, lower_y, y)
+    y = torch.where(release, release_y, y)
+    grip = torch.where(attached & ~release, hold_grip, grip)
+    grip = torch.where(release, open_grip, grip)
+    return torch.stack((x, y, grip), dim=1)
+
+
 def _sample_parametric(policy: FlyConnectomePolicy, observation: torch.Tensor, deterministic: bool):
     mean, log_std = _parameter_statistics(policy, observation)
     distribution = Normal(mean, log_std.exp())
@@ -179,7 +233,7 @@ def _sample_parametric(policy: FlyConnectomePolicy, observation: torch.Tensor, d
         scale = policy.reflex_parameter_max - policy.reflex_parameter_min
         log_jacobian = torch.log(scale) + functional.logsigmoid(raw_parameters) + functional.logsigmoid(-raw_parameters)
         log_probability = (distribution.log_prob(raw_parameters) - log_jacobian).sum(dim=-1, keepdim=True)
-    return action, log_std, log_probability
+    return action, log_std, log_probability, parameters
 
 
 def reflex_parameter_telemetry(policy: FlyConnectomePolicy, observation: torch.Tensor) -> list[dict[str, Any]]:
@@ -203,7 +257,9 @@ _original_load_state_dict = FlyConnectomePolicy.load_state_dict
 def sample_decomposed(policy: FlyConnectomePolicy, observation: torch.Tensor, deterministic: bool = False):
     if _state(policy) is None:
         return _original_sample_decomposed(policy, observation, deterministic)
-    action, _, log_probability = _sample_parametric(policy, observation, deterministic)
+    action, _, log_probability, parameters = _sample_parametric(policy, observation, deterministic)
+    if _uses_default_gantry_task_flow(policy):
+        action = _apply_gantry_task_flow(observation, action, parameters)
     # The protocol retains the decomposition fields, but Parametric SAC has no
     # direct residual actuator branch. ``fly_base`` is f(x; theta_SAC).
     return action, action, torch.zeros_like(action), log_probability
@@ -212,7 +268,9 @@ def sample_decomposed(policy: FlyConnectomePolicy, observation: torch.Tensor, de
 def forward(policy: FlyConnectomePolicy, observation: torch.Tensor):
     if _state(policy) is None:
         return _original_forward(policy, observation)
-    action, log_std, _ = _sample_parametric(policy, observation, deterministic=True)
+    action, log_std, _, parameters = _sample_parametric(policy, observation, deterministic=True)
+    if _uses_default_gantry_task_flow(policy):
+        action = _apply_gantry_task_flow(observation, action, parameters)
     return action, log_std
 
 
