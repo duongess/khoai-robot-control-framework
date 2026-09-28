@@ -242,7 +242,7 @@ class FlyConnectomePolicy(nn.Module):
         # Only descend once the carriage is already horizontally close enough to
         # the object. If the lateral error is still large, keep the gripper level and
         # drive horizontally first.
-        descent_gate = torch.abs(err_x) < torch.tensor(0.05, dtype=observation.dtype, device=observation.device)
+        descent_gate = torch.abs(err_x) < torch.tensor(0.15, dtype=observation.dtype, device=observation.device)
         y_track = torch.where(descent_gate & ~attached, torch.full_like(err_x, -0.5), torch.zeros_like(err_x))
 
         # Post-grasp reflex cascade: lift first while attached but still below the

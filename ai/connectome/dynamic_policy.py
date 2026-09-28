@@ -139,7 +139,12 @@ def bounded_reflex_parameters(policy: FlyConnectomePolicy, observation: torch.Te
     return _bound_parameters(policy, mean)[1]
 
 
-def _evaluate_reflex(policy: FlyConnectomePolicy, observation: torch.Tensor, parameters: Mapping[str, torch.Tensor]) -> torch.Tensor:
+def _evaluate_reflex(
+    policy: FlyConnectomePolicy,
+    observation: torch.Tensor,
+    parameters: Mapping[str, torch.Tensor],
+    signal_overrides: Mapping[int, Mapping[str, torch.Tensor]] | None = None,
+) -> torch.Tensor:
     state = _state(policy)
     assert state is not None
     outputs: list[torch.Tensor] = []
@@ -152,6 +157,8 @@ def _evaluate_reflex(policy: FlyConnectomePolicy, observation: torch.Tensor, par
         fallback = observation[:, default_signal_index]
         signals = {"x": fallback, "err": fallback, "error": fallback, "vel": torch.zeros_like(fallback)}
         signals.update({name: observation[:, column] for name, column in channel.signal_indices.items()})
+        if signal_overrides is not None:
+            signals.update(signal_overrides.get(action_index, {}))
         channel_parameters = {spec.name: parameters[DynamicReflexEngine.parameter_key(channel_index, spec.name)] for spec in channel.parameters}
         value = state.engine._evaluate_node(tree.body, {**signals, **channel_parameters})
         if not isinstance(value, torch.Tensor):
@@ -177,45 +184,45 @@ def _uses_default_gantry_task_flow(policy: FlyConnectomePolicy) -> bool:
 
 
 def _apply_gantry_task_flow(
-    observation: torch.Tensor, action: torch.Tensor, parameters: Mapping[str, torch.Tensor]
-) -> torch.Tensor:
-    """Phase orchestration around parametric reflexes for pick, carry, and drop.
+    observation: torch.Tensor,
+    parameters: Mapping[str, torch.Tensor],
+) -> dict[int, dict[str, torch.Tensor]]:
+    """Route phase-appropriate physical errors into the universal reflex laws.
 
-    Registered theta values remain gains and biases; phase selects the physical
-    error and enforces the safe lift and release directions.
+    This function never edits a motor action. It only selects the error signal
+    consumed by DynamicReflexEngine, so every output remains f(x, theta).
     """
     if observation.shape[1] <= 20:
-        return action
-    err_target_x = observation[:, 12]
-    gripper_y = observation[:, 1]
+        return {}
     attached = observation[:, 15] > 0.5
+    aligned_with_object = torch.abs(observation[:, 10]) < 0.10
     phase_code = torch.round((observation[:, 19] + 1.0) * 4.5).to(torch.int64)
-    carry_ready = gripper_y > 0.50
-    lift = attached & ~carry_ready
-    lower_at_target = attached & (phase_code == 6)
-    release = phase_code >= 7
-    transport = attached & carry_ready & ~lower_at_target & ~release
+    phase_lower = attached & (phase_code == 6)
+    phase_release = phase_code >= 7
 
     ax, bx = parameters["channel_0.a"], parameters["channel_0.b"]
     ay, by = parameters["channel_1.a"], parameters["channel_1.b"]
-    ag, bg = parameters["channel_2.a"], parameters["channel_2.b"]
-    target_x = (ax * err_target_x + bx).clamp(-1.0, 1.0)
-    lift_y = (ay + by).clamp(min=0.35, max=1.0)
-    lower_y = (-ay + by).clamp(min=-1.0, max=-0.35)
-    release_y = (-ay + by).clamp(min=-1.0, max=-0.30)
-    hold_grip = torch.maximum(action[:, 2], torch.full_like(action[:, 2], 0.50))
-    open_grip = (-(ag + bg)).clamp(-1.0, -0.50)
+    x_object = observation[:, 10]
+    x_far = x_object + bx / ax
+    x_signal = torch.where(attached, -observation[:, 12], x_object)
+    # Away from the object, route a bias-cancelled error so b_x cannot reverse
+    # the sign of -a_x*x while the carriage is crossing the workspace.
+    x_signal = torch.where(~attached & ~aligned_with_object, x_far, x_signal)
+    carry_error = observation[:, 1] - 1.00
+    release_error = observation[:, 1] - 0.25
+    # Keep the reflex error positive even at the release-height boundary.
+    # With the registered descent prior b_y <= -0.3 and a_y >= 0.5,
+    # x_y >= 0.4 guarantees u_y <= -0.5 without overriding the action.
+    release_error = torch.maximum(release_error, torch.full_like(release_error, 0.40))
+    y_signal = torch.where(attached, carry_error, observation[:, 11])
+    # Route b_y/a_y while far from the object: the universal law then evaluates
+    # -a_y*(b_y/a_y)+b_y = 0, holding transit height without an action override.
+    y_signal = torch.where(~attached & ~aligned_with_object, by / ay, y_signal)
+    y_signal = torch.where(phase_lower | phase_release, release_error, y_signal)
 
-    x, y, grip = action.unbind(dim=1)
-    x = torch.where(lift, torch.zeros_like(x), x)
-    x = torch.where(transport | lower_at_target | release, target_x, x)
-    y = torch.where(lift, lift_y, y)
-    y = torch.where(transport, torch.zeros_like(y), y)
-    y = torch.where(lower_at_target, lower_y, y)
-    y = torch.where(release, release_y, y)
-    grip = torch.where(attached & ~release, hold_grip, grip)
-    grip = torch.where(release, open_grip, grip)
-    return torch.stack((x, y, grip), dim=1)
+    grip_signal = torch.maximum(observation[:, 17], observation[:, 20])
+    grip_signal = torch.where(phase_release, -torch.ones_like(grip_signal), grip_signal)
+    return {0: {"x": x_signal}, 1: {"x": y_signal}, 2: {"x": grip_signal}}
 
 
 def _sample_parametric(policy: FlyConnectomePolicy, observation: torch.Tensor, deterministic: bool):
@@ -223,7 +230,14 @@ def _sample_parametric(policy: FlyConnectomePolicy, observation: torch.Tensor, d
     distribution = Normal(mean, log_std.exp())
     raw_parameters = mean if deterministic else distribution.rsample()
     _, parameters = _bound_parameters(policy, raw_parameters)
-    action = _evaluate_reflex(policy, observation, parameters)
+    if _uses_default_gantry_task_flow(policy):
+        release = torch.round((observation[:, 19] + 1.0) * 4.5).to(torch.int64) >= 7
+        parameters = dict(parameters)
+        parameters["channel_2.b"] = torch.where(
+            release, -0.5 - 0.5 * torch.sigmoid(parameters["channel_2.b"]), parameters["channel_2.b"]
+        )
+    signal_overrides = _apply_gantry_task_flow(observation, parameters) if _uses_default_gantry_task_flow(policy) else None
+    action = _evaluate_reflex(policy, observation, parameters, signal_overrides)
     if deterministic:
         log_probability = torch.zeros((len(action), 1), dtype=action.dtype, device=action.device)
     else:
@@ -257,9 +271,7 @@ _original_load_state_dict = FlyConnectomePolicy.load_state_dict
 def sample_decomposed(policy: FlyConnectomePolicy, observation: torch.Tensor, deterministic: bool = False):
     if _state(policy) is None:
         return _original_sample_decomposed(policy, observation, deterministic)
-    action, _, log_probability, parameters = _sample_parametric(policy, observation, deterministic)
-    if _uses_default_gantry_task_flow(policy):
-        action = _apply_gantry_task_flow(observation, action, parameters)
+    action, _, log_probability, _ = _sample_parametric(policy, observation, deterministic)
     # The protocol retains the decomposition fields, but Parametric SAC has no
     # direct residual actuator branch. ``fly_base`` is f(x; theta_SAC).
     return action, action, torch.zeros_like(action), log_probability
@@ -268,9 +280,7 @@ def sample_decomposed(policy: FlyConnectomePolicy, observation: torch.Tensor, de
 def forward(policy: FlyConnectomePolicy, observation: torch.Tensor):
     if _state(policy) is None:
         return _original_forward(policy, observation)
-    action, log_std, _, parameters = _sample_parametric(policy, observation, deterministic=True)
-    if _uses_default_gantry_task_flow(policy):
-        action = _apply_gantry_task_flow(observation, action, parameters)
+    action, log_std, _, _ = _sample_parametric(policy, observation, deterministic=True)
     return action, log_std
 
 

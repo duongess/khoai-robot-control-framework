@@ -181,6 +181,20 @@ def test_fly_base_tracks_object_with_signed_closed_loop_reflex(tmp_path) -> None
     assert fly_base[2, 2] > 0
 
 
+def test_closed_loop_descent_gate_allows_seven_centimetre_misalignment(tmp_path) -> None:
+    policy = FlyConnectomePolicy(
+        30, 3, _graph(tmp_path), hidden_dim=8, base_policy="closed_loop",
+        residual_alpha=(0.0, 0.0, 0.0), tactile_observation_indices=(17, 16, 18, 26),
+    )
+    observation = torch.zeros((1, 30), dtype=torch.float32)
+    observation[:, 10] = 0.07
+    observation[:, 11] = 0.50
+
+    _, fly_base, _, _ = policy.sample_decomposed(observation, deterministic=True)
+
+    assert fly_base[0, 1] < 0.0
+
+
 def test_fly_base_is_pure_per_step_closed_loop_reflex(tmp_path) -> None:
     policy = FlyConnectomePolicy(
         30,

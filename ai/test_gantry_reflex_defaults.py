@@ -27,7 +27,7 @@ def test_default_gantry_law_uses_error_features_and_varies_theta_by_state(tmp_pa
 
     assert not torch.allclose(parameters["channel_0.a"][0], parameters["channel_0.a"][1])
     assert action[0, 0] < 0 and action[1, 0] > 0
-    assert torch.all(action[:, 1] < 0)  # both grippers are above the object
+    assert torch.allclose(action[:, 1], torch.zeros_like(action[:, 1]))  # far from object: hold transit height
     assert torch.allclose(action, reflex)
     assert torch.equal(residual, torch.zeros_like(residual))
     assert torch.all(policy.parameter_log_std > policy.min_log_std)
@@ -70,7 +70,32 @@ def test_default_gantry_task_flow_lifts_carries_and_releases(tmp_path) -> None:
 
     action, _, _, _ = policy.sample_decomposed(state, deterministic=True)
 
-    assert action[0, 1] > 0 and action[0, 2] >= 0.50
-    assert action[1, 0] > 0 and action[1, 1] == 0 and action[1, 2] >= 0.50
-    assert action[2, 0] > 0 and action[2, 1] < 0 and action[2, 2] >= 0.50
+    assert action[0, 1] > 0 and action[0, 2] > 0
+    assert action[1, 0] > 0 and action[1, 1] < 0 and action[1, 2] > 0
+    assert action[2, 0] > 0 and action[2, 1] <= -0.5 and action[2, 2] > 0
     assert action[3, 1] < 0 and action[3, 2] < 0
+
+
+def test_phase_routing_keeps_action_on_engine_gradient_path(tmp_path) -> None:
+    policy = FlyConnectomePolicy(30, 3, _graph(tmp_path), hidden_dim=8)
+    policy.register_default_gantry_reflex_law()
+    state = torch.zeros((1, 30), requires_grad=False)
+    state[:, 15], state[:, 1], state[:, 12] = 1.0, 0.70, 0.10
+    action, _, _, _ = policy.sample_decomposed(state, deterministic=True)
+    assert action[0, 1].abs() > 1e-5  # transport is routed, not hard-coded to zero
+    action.sum().backward()
+    assert policy.parameter_head.weight.grad is not None
+    assert policy.parameter_head.weight.grad.abs().sum() > 0
+
+
+def test_approach_gate_descends_only_when_horizontally_aligned(tmp_path) -> None:
+    policy = FlyConnectomePolicy(30, 3, _graph(tmp_path), hidden_dim=8)
+    policy.register_default_gantry_reflex_law()
+    state = torch.zeros((2, 30))
+    state[0, 10], state[0, 11] = -0.40, 0.50  # far left of object
+    state[1, 10], state[1, 11] = -0.05, 0.50  # within the 10cm gate
+
+    action, _, _, _ = policy.sample_decomposed(state, deterministic=True)
+
+    assert action[0, 0] > 0 and torch.allclose(action[0, 1], torch.tensor(0.0))
+    assert action[1, 0] > 0 and action[1, 1] < 0

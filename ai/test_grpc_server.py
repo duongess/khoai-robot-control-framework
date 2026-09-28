@@ -119,3 +119,29 @@ def test_checkpoint_round_trip_restores_complete_sac_training_state(tmp_path: Pa
 def test_checkpoint_model_name_rejects_paths_and_unsafe_names(name: str):
     with pytest.raises(ValueError):
         validate_model_name(name)
+
+
+def test_best_checkpoint_and_early_stopping_callback(tmp_path: Path):
+    config = LearnerConfig(state_dim=3, action_dim=3, checkpoint_dir=str(tmp_path))
+    servicer = LearnerServicer(config, model_name="grasp-v1")
+
+    servicer.record_episode_result(True, 5.0)
+    best_path = tmp_path / "best_policy_checkpoint.pt"
+    assert best_path.is_file()
+    assert servicer._best_success_rate == pytest.approx(1.0)
+    assert servicer._best_average_reward == pytest.approx(5.0)
+
+    for _ in range(99):
+        servicer.record_episode_result(True, 5.0)
+    assert servicer._early_stopped
+    assert servicer._high_success_streak == 100
+
+    previous_step = servicer._training_step
+    transitions = [transition_pb2.Transition(
+        state=environment_pb2.State(values=[0.0, 0.1, 0.2]),
+        action=environment_pb2.Action(values=[0.0, 0.0, 0.0]),
+        reward=1.0,
+        next_state=environment_pb2.State(values=[0.1, 0.2, 0.3]),
+    ) for _ in range(4)]
+    result = servicer.TrainBatch(learner_pb2.TrainBatchRequest(batch=transition_pb2.TransitionBatch(transitions=transitions)), AbortContext())
+    assert result.training_step == previous_step
