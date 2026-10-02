@@ -1,11 +1,13 @@
 """Local gRPC server for the Soft Actor-Critic learner."""
 
 import json
+import math
 import logging
 import signal
 import sys
 import threading
 from concurrent import futures
+from collections import deque
 from copy import deepcopy
 from dataclasses import asdict, replace
 from pathlib import Path
@@ -18,6 +20,7 @@ import torch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "gen" / "python"))
 
 from ai.config import LearnerConfig, SACConfig
+from ai.connectome.dynamic_policy import DEFAULT_GANTRY_REFLEX_CONFIG
 from ai.checkpoints import (
     CHECKPOINT_FORMAT_VERSION,
     atomic_save_checkpoint,
@@ -30,6 +33,21 @@ from gen.python.learner.v1 import environment_pb2, learner_pb2, learner_pb2_grpc
 
 
 ADDRESS = "127.0.0.1:50051"
+
+
+def _upgrade_legacy_default_grip(config: object) -> dict | None:
+    """Replace only the obsolete default grip channel in persisted registries."""
+    if not isinstance(config, dict) or not isinstance(config.get("channels"), list):
+        return None
+    updated = deepcopy(config)
+    for index, channel in enumerate(updated["channels"]):
+        if not isinstance(channel, dict) or channel.get("action_index") != 2:
+            continue
+        signals = channel.get("signal_indices")
+        if channel.get("expression_type") == "linear" and isinstance(signals, dict) and signals.get("x") == 17:
+            updated["channels"][index] = deepcopy(DEFAULT_GANTRY_REFLEX_CONFIG["channels"][2])
+            return updated
+    return None
 
 
 class JsonFormatter(logging.Formatter):
@@ -81,6 +99,7 @@ class LearnerServicer(learner_pb2_grpc.LearnerServiceServicer):
             gamma=self._config.gamma,
             target_entropy=-float(self._config.action_dim),
             controller_type=self._config.controller_type,
+            base_policy=self._config.base_policy,
             graph_path=self._config.graph_path,
             propagation_steps=self._config.propagation_steps,
             train_edge_gains=self._config.train_edge_gains,
@@ -106,6 +125,10 @@ class LearnerServicer(learner_pb2_grpc.LearnerServiceServicer):
             vertical_acceleration_observation_index=self._config.vertical_acceleration_observation_index,
             previous_vertical_action_observation_index=self._config.previous_vertical_action_observation_index,
         ))
+        # A new graph learner must never silently serve the legacy residual actor.
+        # Checkpoints restore their own persisted schema in _restore_checkpoint.
+        if payload is None and self._config.controller_type in {"fly_connectome", "random_graph"}:
+            self._agent.register_reflex_law(DEFAULT_GANTRY_REFLEX_CONFIG)
         self._samples_seen = 0
         # Version zero is reserved by the protocol for "latest". Every actual
         # episode therefore receives a positive, immutable snapshot ID.
@@ -119,8 +142,26 @@ class LearnerServicer(learner_pb2_grpc.LearnerServiceServicer):
         self._training_step = 0
         self._predict_requests = 0
         self._train_requests = 0
+        self._episode_results = deque(maxlen=100)
+        self._episode_keys: set[tuple[object, ...]] = set()
+        self._best_success_rate = 0.0
+        self._best_average_reward = float("-inf")
+        self._high_success_streak = 0
+        self._early_stopped = False
+        self._last_metrics = self._empty_metrics()
         if payload is not None:
             self._restore_checkpoint(payload, checkpoint)
+            # Legacy checkpoints predate the registry. Upgrade them at boot
+            # rather than reviving the residual branch for a new episode.
+            if self._config.controller_type in {"fly_connectome", "random_graph"}:
+                if not self._agent.actor.reflex_parameter_count:
+                    self._agent.register_reflex_law(DEFAULT_GANTRY_REFLEX_CONFIG)
+                    self._actor_snapshots = {self._policy_version: deepcopy(self._agent.actor).eval()}
+                else:
+                    migrated = _upgrade_legacy_default_grip(self._agent.actor.get_extra_state().get("reflex_config"))
+                    if migrated is not None:
+                        self._agent.register_reflex_law(migrated)
+                        self._actor_snapshots = {self._policy_version: deepcopy(self._agent.actor).eval()}
 
     def PredictBatch(self, request, context):
         try:
@@ -179,24 +220,32 @@ class LearnerServicer(learner_pb2_grpc.LearnerServiceServicer):
             context.abort(grpc.StatusCode.INVALID_ARGUMENT, "transition batch is required")
         try:
             batch = self._batch_to_tensors(request.batch.transitions)
+            self._record_terminal_transitions(request.batch.transitions)
             # The Go runtime already applies backpressure, and this lock also
             # makes the service safe if another client submits a train request.
             # Prediction continues against its prior immutable snapshot while
             # the live actor/critics perform a backward pass.
             with self._training_lock:
-                metrics = self._agent.update(batch)
-                snapshot = deepcopy(self._agent.actor).eval()
-                with self._policy_lock:
-                    self._policy_version += 1
-                    self._actor_snapshots[self._policy_version] = snapshot
-                    while len(self._actor_snapshots) > self._config.max_policy_snapshots:
-                        del self._actor_snapshots[min(self._actor_snapshots)]
+                if self._early_stopped:
+                    self._zero_optimizer_gradients()
+                    metrics = dict(self._last_metrics)
+                else:
+                    metrics = self._agent.update(batch)
+                if not self._early_stopped:
+                    snapshot = deepcopy(self._agent.actor).eval()
+                    with self._policy_lock:
+                        self._policy_version += 1
+                        self._actor_snapshots[self._policy_version] = snapshot
+                        while len(self._actor_snapshots) > self._config.max_policy_snapshots:
+                            del self._actor_snapshots[min(self._actor_snapshots)]
                 # Keep counters in the same critical section as weights and
                 # policy publication so a concurrent checkpoint is coherent.
                 self._samples_seen += len(request.batch.transitions)
-                self._training_step += 1
+                if not self._early_stopped:
+                    self._training_step += 1
         except ValueError as error:
             context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(error))
+        self._last_metrics = dict(metrics)
         self._train_requests += 1
         if self._train_requests % self._config.log_every_n_requests == 0:
             LOGGER.info("train_batch", extra={"fields": {"received": len(request.batch.transitions), "samples_seen": self._samples_seen, **metrics}})
@@ -216,6 +265,109 @@ class LearnerServicer(learner_pb2_grpc.LearnerServiceServicer):
             actor_log_std_vertical=metrics["actor_log_std_vertical"],
             actor_log_std_gripper=metrics["actor_log_std_gripper"],
         )
+
+    @staticmethod
+    def _empty_metrics() -> dict[str, float]:
+        return {"actor_loss": 0.0, "alpha_loss": 0.0, "entropy": 0.0, "critic_one_loss": 0.0, "critic_two_loss": 0.0, "critic_one_q": 0.0, "critic_two_q": 0.0, "alpha": 1.0, "actor_log_std_horizontal": 0.0, "actor_log_std_vertical": 0.0, "actor_log_std_gripper": 0.0}
+
+    def _zero_optimizer_gradients(self) -> None:
+        for optimizer in (self._agent.actor_optimizer, self._agent.critic_one_optimizer, self._agent.critic_two_optimizer, self._agent.alpha_optimizer):
+            optimizer.zero_grad(set_to_none=True)
+
+    def _rolling_success_rate(self) -> float:
+        if not self._episode_results:
+            return 0.0
+        return sum(1 for success, _ in self._episode_results if success) / len(self._episode_results)
+
+    def _rolling_average_reward(self) -> float:
+        if not self._episode_results:
+            return float("-inf")
+        return sum(reward for _, reward in self._episode_results) / len(self._episode_results)
+
+    def _freeze_learning_locked(self) -> None:
+        self._zero_optimizer_gradients()
+        for module in (self._agent.actor, self._agent.critic_one, self._agent.critic_two):
+            module.eval()
+            for parameter in module.parameters():
+                parameter.requires_grad_(False)
+        self._agent.log_alpha.requires_grad_(False)
+        self._early_stopped = True
+        LOGGER.warning("[EARLY STOPPING] Target accuracy achieved (>=99%%). Model frozen at peak performance.", extra={"fields": {"success_rate": self._rolling_success_rate(), "episodes": len(self._episode_results)}})
+
+    def _evaluation_state(self) -> dict[str, object]:
+        return {"best_success_rate": self._best_success_rate, "best_average_reward": self._best_average_reward, "high_success_streak": self._high_success_streak, "early_stopped": self._early_stopped, "episode_results": list(self._episode_results)}
+
+    def _restore_evaluation_state(self, payload: object) -> None:
+        if not isinstance(payload, dict):
+            return
+        results = payload.get("episode_results")
+        if isinstance(results, list):
+            for item in results[-100:]:
+                if isinstance(item, (list, tuple)) and len(item) == 2 and isinstance(item[0], bool) and isinstance(item[1], (int, float)) and math.isfinite(float(item[1])):
+                    self._episode_results.append((item[0], float(item[1])))
+        if isinstance(payload.get("best_success_rate"), (int, float)) and math.isfinite(float(payload["best_success_rate"])):
+            self._best_success_rate = float(payload["best_success_rate"])
+        if isinstance(payload.get("best_average_reward"), (int, float)) and math.isfinite(float(payload["best_average_reward"])):
+            self._best_average_reward = float(payload["best_average_reward"])
+        if isinstance(payload.get("high_success_streak"), int) and payload["high_success_streak"] >= 0:
+            self._high_success_streak = payload["high_success_streak"]
+        if payload.get("early_stopped") is True:
+            self._freeze_learning_locked()
+
+    def _save_best_checkpoint_locked(self, success_rate: float, average_reward: float) -> None:
+        path = checkpoint_path(self._config.checkpoint_dir, "best_policy_checkpoint")
+        evaluation = self._evaluation_state()
+        evaluation["best_success_rate"] = success_rate
+        evaluation["best_average_reward"] = average_reward
+        payload = {"format_version": CHECKPOINT_FORMAT_VERSION, "model_name": "best_policy_checkpoint", "learner_config": asdict(self._config), "agent": self._agent.checkpoint_state(), "samples_seen": self._samples_seen, "policy_version": self._policy_version, "training_step": self._training_step, "evaluation": evaluation}
+        atomic_save_checkpoint(path, payload)
+        self._best_success_rate = success_rate
+        self._best_average_reward = average_reward
+        LOGGER.warning("[AUTO-SAVE] New best model saved with Success Rate: %.1f%%!", success_rate * 100.0, extra={"fields": {"path": str(path), "average_reward": average_reward}})
+
+    def _record_episode_result_locked(self, success: bool, average_reward: float) -> None:
+        if not math.isfinite(average_reward):
+            raise ValueError("episode reward must be finite")
+        self._episode_results.append((bool(success), float(average_reward)))
+        success_rate = self._rolling_success_rate()
+        average = self._rolling_average_reward()
+        self._high_success_streak = self._high_success_streak + 1 if success_rate >= 0.99 else 0
+        if success_rate >= 0.985 and average > self._best_average_reward:
+            self._save_best_checkpoint_locked(success_rate, average)
+        if self._high_success_streak >= 100 and not self._early_stopped:
+            self._freeze_learning_locked()
+
+    def record_episode_result(self, success: bool, average_reward: float) -> None:
+        """Record an exact evaluation result from an external episode runner."""
+        with self._training_lock:
+            self._record_episode_result_locked(success, float(average_reward))
+
+    @staticmethod
+    def _terminal_success(transition) -> bool:
+        if transition.truncated:
+            return False
+        values = list(transition.next_state.values)
+        if len(values) > 19 and math.isfinite(float(values[19])):
+            phase_code = round((float(values[19]) + 1.0) * 4.5)
+            if phase_code == 8:
+                return True
+            if phase_code == 9:
+                return False
+        return float(transition.reward) > 0.0
+
+    def _record_terminal_transitions(self, transitions) -> None:
+        with self._training_lock:
+            for transition in transitions:
+                if not (transition.terminated or transition.truncated):
+                    continue
+                episode_id = transition.episode_id
+                key = (episode_id, int(transition.step)) if episode_id else ("terminal", tuple(round(float(value), 6) for value in transition.next_state.values), round(float(transition.reward), 6), bool(transition.truncated))
+                if key in self._episode_keys:
+                    continue
+                self._episode_keys.add(key)
+                self._record_episode_result_locked(self._terminal_success(transition), float(transition.reward))
+                if len(self._episode_keys) > 10000:
+                    self._episode_keys.clear()
 
     def HealthCheck(self, request, context):
         return learner_pb2.HealthCheckResponse(
@@ -242,6 +394,7 @@ class LearnerServicer(learner_pb2_grpc.LearnerServiceServicer):
                         "samples_seen": self._samples_seen,
                         "policy_version": self._policy_version,
                         "training_step": self._training_step,
+                        "evaluation": self._evaluation_state(),
                     }
                     atomic_save_checkpoint(path, payload)
                     self._model_name = model_name
@@ -264,11 +417,14 @@ class LearnerServicer(learner_pb2_grpc.LearnerServiceServicer):
             self._samples_seen = self._checkpoint_counter(payload, "samples_seen")
             self._policy_version = self._checkpoint_counter(payload, "policy_version", minimum=1)
             self._training_step = self._checkpoint_counter(payload, "training_step")
+            self._restore_evaluation_state(payload.get("evaluation"))
             # The staged actor schedule belongs to the learner counter, which
             # is stored outside SAC's tensor state. Restore it explicitly so a
             # resumed model is not accidentally re-frozen for 128 updates.
             self._agent.training_step = self._training_step
             self._agent._configure_actor_trainability()
+            if self._early_stopped:
+                self._freeze_learning_locked()
         except (KeyError, TypeError, ValueError) as error:
             raise ValueError(f"could not restore checkpoint {checkpoint.name}: {error}") from error
         # Episode snapshots intentionally do not survive a process restart.

@@ -1,6 +1,8 @@
 # Existing Go task APIs and gRPC actions remain unchanged; these configure the Python learner.
 controller:
   type: fly_connectome
+  # The graph motor readout is the nominal controller; closed_loop is legacy baseline only.
+  base_policy: connectome
   graph_path: data/connectome/connectome_graph.npz
   propagation_steps: 4
   train_edge_gains: true
