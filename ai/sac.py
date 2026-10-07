@@ -11,7 +11,7 @@ from torch.nn import functional as functional
 from ai.config import SACConfig
 from ai.connectome.graph import ConnectomeGraph
 from ai.connectome.policy import FlyConnectomePolicy, RandomGraphPolicy
-from ai.networks import Critic, GaussianActor
+from ai.networks import Critic, DenseParametricActor, GaussianActor
 
 
 @dataclass
@@ -48,8 +48,8 @@ class SACAgent:
 
     def register_reflex_law(self, config_dict: dict[str, Any]) -> dict[str, Any]:
         """Switch this graph actor to parameter-space SAC for a registered law."""
-        if not isinstance(self.actor, FlyConnectomePolicy):
-            raise ValueError("Parametric SAC requires a fly_connectome or random_graph actor")
+        if not isinstance(self.actor, (FlyConnectomePolicy, DenseParametricActor)):
+            raise ValueError("Parametric SAC requires a parametric_mlp, fly_connectome, or random_graph actor")
         registered = self.actor.register_reflex_law(config_dict)
         # The parameter head changes shape, so retain no stale optimizer slots.
         self.actor_optimizer = self._build_actor_optimizer()
@@ -263,6 +263,8 @@ class SACAgent:
     def _build_actor(config: SACConfig) -> nn.Module:
         if config.controller_type == "mlp":
             return GaussianActor(config.state_dim, config.action_dim, config.hidden_dim, config.min_log_std)
+        if config.controller_type == "parametric_mlp":
+            return DenseParametricActor(config.state_dim, config.action_dim, config.hidden_dim, config.min_log_std)
         graph = ConnectomeGraph.load(config.graph_path or "")
         arguments = dict(
             observation_dim=config.state_dim,

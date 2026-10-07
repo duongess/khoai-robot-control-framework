@@ -69,8 +69,9 @@ def register_reflex_law(policy: FlyConnectomePolicy, config_dict: Mapping[str, A
     engine = DynamicReflexEngine(config)  # Compile and validate before state changes.
     if config.parameter_count == 0:
         raise ReflexConfigError("a Parametric SAC reflex requires at least one free parameter")
-    reference = policy.base_head[0].weight
-    head = nn.Linear(reference.shape[1], config.parameter_count, device=reference.device, dtype=reference.dtype)
+    reference = next(policy.parameters())
+    feature_dim = policy.base_head[0].in_features if hasattr(policy, "base_head") else policy.feature_dim
+    head = nn.Linear(feature_dim, config.parameter_count, device=reference.device, dtype=reference.dtype)
     low = torch.tensor([spec.min_val for channel in config.channels for spec in channel.parameters], dtype=reference.dtype, device=reference.device)
     high = torch.tensor([spec.max_val for channel in config.channels for spec in channel.parameters], dtype=reference.dtype, device=reference.device)
     defaults = torch.tensor([spec.default for channel in config.channels for spec in channel.parameters], dtype=reference.dtype, device=reference.device)
@@ -97,8 +98,9 @@ def register_default_gantry_reflex_law(policy: FlyConnectomePolicy) -> dict[str,
 def clear_reflex_law(policy: FlyConnectomePolicy) -> None:
     policy.parameter_head = None
     policy.parameter_log_std = None
-    policy.reflex_parameter_min = torch.empty(0, device=policy.base_head[0].weight.device)
-    policy.reflex_parameter_max = torch.empty(0, device=policy.base_head[0].weight.device)
+    device = next(policy.parameters()).device
+    policy.reflex_parameter_min = torch.empty(0, device=device)
+    policy.reflex_parameter_max = torch.empty(0, device=device)
     policy._dynamic_reflex_registry = None
 
 

@@ -5,6 +5,7 @@ data/connectome/*.parquet
 data/connectome/*.npz
 data/connectome/*metadata.json
 data/models/
+data/comparison_demo/
 __pycache__/
 *.py[cod]
 .venv/

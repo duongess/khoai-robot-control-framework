@@ -70,3 +70,20 @@ def test_parametric_sac_trains_and_restores_registered_parameter_head(tmp_path) 
     assert restored.actor.reflex_parameter_count == 2
     assert restored.target_entropy == -2.0
     assert restored.actor.get_extra_state() == agent.actor.get_extra_state()
+
+
+def test_dense_parametric_actor_uses_same_law_and_restores_checkpoint() -> None:
+    config = SACConfig(state_dim=3, action_dim=3, hidden_dim=8, controller_type="parametric_mlp")
+    agent = SACAgent(config)
+    agent.register_reflex_law(_law())
+    states = torch.tensor([[0.25, 0.0, 0.0]])
+    action = agent.act(states)
+    assert agent.actor.reflex_parameter_count == 2
+    assert agent.target_entropy == -2.0
+    assert action.shape == (1, 3)
+    assert torch.all(action.abs() <= 1)
+
+    restored = SACAgent(config)
+    restored.load_checkpoint_state(agent.checkpoint_state())
+    assert torch.allclose(action, restored.act(states))
+    assert restored.actor.get_extra_state() == agent.actor.get_extra_state()

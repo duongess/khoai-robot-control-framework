@@ -161,7 +161,39 @@ instead of resuming an older checkpoint.
 
 ## Evaluation protocol
 
-Evaluate all three controllers using the same downstream task, reward function, seeds, training budget, and episode count. Record episode reward, success rate, collision count (from the task safety layer), steps to a stated success threshold, inference latency, process memory, observation-noise robustness, and object-position-shift robustness. Do not claim a connectome advantage unless measurements demonstrate it. The framework has no arm environment, so it cannot fabricate these task-specific metrics locally.
+### Paired Parametric SAC ablation
+
+From this directory, with Python dependencies installed (`poetry install`), Go
+available, the sibling `khoai-robot-visualizer-web` checkout present, and the
+cached `data/connectome/connectome_graph.npz` available:
+
+```bash
+python run_comparison_demo.py
+```
+
+This trains `dense_mlp` and then `sparse_connectome` in one process. Both use
+`DEFAULT_GANTRY_REFLEX_CONFIG` and the existing Parametric SAC update, with
+identical episode seeds and force-control task settings. The default training
+budget is 100 episodes per arm. The deterministic test uses a separate shared
+set of exactly 100 episode seeds; each seed fixes an object friction drawn from
+`0.35 ± 0.06` and an object X offset drawn from `±0.35 m`. These values are
+recorded in `data/comparison_demo/protocol.json`. The test distribution does
+not vary other scene parameters.
+
+Each arm writes `train.jsonl`, `test.jsonl`, `summary.json`, and `checkpoint.pt`
+under `data/comparison_demo/<feature_extractor_type>/`. The runner saves
+`data/comparison_demo/comparison_plot.png` and prints the test summary as a
+Markdown table. Success rate counts successful terminal episodes. Peak force
+is the maximum physical grip force across test steps. Slip rate is the fraction
+of test steps reporting `slipping`. Cycle time is terminal steps times the
+task's 0.1 s control period. Inference latency measures the Python actor call
+per control step and excludes Go simulator communication.
+
+For a short wiring check, run
+`python run_comparison_demo.py --train-episodes 2 --eval-episodes 3`.
+Use the defaults for the stated 100 episode test protocol.
+
+For broader controller comparisons, use the same downstream task, reward function, seeds, training budget, and episode count. Record episode reward, success rate, collision count (from the task safety layer), steps to a stated success threshold, inference latency, process memory, observation-noise robustness, and object-position-shift robustness. Do not claim a connectome advantage unless measurements demonstrate it. The framework alone has no arm environment; this ablation uses the sibling visualizer's force-control task.
 
 ## Tests and troubleshooting
 
