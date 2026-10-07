@@ -359,3 +359,19 @@ func TestRuntimeSchedulesAtMostOneTrainingBatchAtATime(t *testing.T) {
 	close(learner.release)
 	runtime.Stop()
 }
+
+func TestRuntimeRollingSuccessRateUsesLast100Episodes(t *testing.T) {
+	runtime := NewRuntime()
+	for i := 0; i < 100; i++ {
+		runtime.recordEpisodeOutcome(i < 70)
+	}
+	if got, want := runtime.rollingSuccessRate(), 0.7; got != want {
+		t.Fatalf("rolling success rate = %.3f, want %.3f", got, want)
+	}
+	for i := 0; i < 10; i++ {
+		runtime.recordEpisodeOutcome(false)
+	}
+	if got, want := runtime.rollingSuccessRate(), 0.6; got != want {
+		t.Fatalf("rolling success rate after 110 episodes = %.3f, want %.3f", got, want)
+	}
+}

@@ -3,6 +3,7 @@
 import json
 import math
 import logging
+import os
 import signal
 import sys
 import threading
@@ -32,7 +33,7 @@ from ai.sac import SACAgent, TensorBatch
 from gen.python.learner.v1 import environment_pb2, learner_pb2, learner_pb2_grpc
 
 
-ADDRESS = "127.0.0.1:50051"
+ADDRESS = os.getenv("LEARNER_ADDRESS", "127.0.0.1:50051")
 
 
 def _upgrade_legacy_default_grip(config: object) -> dict | None:
@@ -502,3 +503,19 @@ def serve(model_name: str | None = None) -> None:
     signal.signal(signal.SIGINT, stop_server)
     signal.signal(signal.SIGTERM, stop_server)
     server.wait_for_termination()
+
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        prog="python -m ai.grpc_server",
+        description="Run a local SAC learner service for the Khoai robot runtime.",
+    )
+    parser.add_argument(
+        "model_name",
+        nargs="?",
+        default=None,
+        help="Optional checkpoint name to load or create. Example: grasp-v1",
+    )
+    serve(parser.parse_args().model_name)

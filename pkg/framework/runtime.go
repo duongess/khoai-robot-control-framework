@@ -41,42 +41,46 @@ type runtimeWorker struct {
 	actionSource         string
 }
 
+const rollingSuccessWindowEpisodes = 100
+
 type runtimeMetrics struct {
-	totalSteps            uint64
-	totalEpisodes         uint64
-	successes             uint64
-	totalReward           float64
-	trainingBatches       uint64
-	policyVersion         uint64
-	trainingStep          uint64
-	actorLoss             float32
-	criticLoss            float32
-	alphaLoss             float32
-	entropy               float32
-	criticOneQ            float32
-	criticTwoQ            float32
-	alpha                 float32
-	actorLogStdHorizontal float32
-	actorLogStdVertical   float32
-	actorLogStdGripper    float32
-	startedAt             time.Time
-	lastProgressAt        time.Time
-	rateStartedAt         time.Time
-	rateStartSteps        uint64
-	rateStartEpisodes     uint64
-	stepsPerSecond        float64
-	episodesPerSecond     float64
-	actionCount           uint64
-	rawActionSum          []float64
-	rawActionSquare       []float64
-	filteredActionSum     []float64
-	filteredActionSquare  []float64
-	deadZoneRemoved       []uint64
-	filterModified        []uint64
-	phaseCounts           map[int]uint64
-	failureReasons        map[string]uint64
-	contactSamples        uint64
-	attachmentSamples     uint64
+	totalSteps             uint64
+	totalEpisodes          uint64
+	successes              uint64
+	totalReward            float64
+	recentEpisodeSuccesses []bool
+	recentEpisodeIndex     int
+	trainingBatches        uint64
+	policyVersion          uint64
+	trainingStep           uint64
+	actorLoss              float32
+	criticLoss             float32
+	alphaLoss              float32
+	entropy                float32
+	criticOneQ             float32
+	criticTwoQ             float32
+	alpha                  float32
+	actorLogStdHorizontal  float32
+	actorLogStdVertical    float32
+	actorLogStdGripper     float32
+	startedAt              time.Time
+	lastProgressAt         time.Time
+	rateStartedAt          time.Time
+	rateStartSteps         uint64
+	rateStartEpisodes      uint64
+	stepsPerSecond         float64
+	episodesPerSecond      float64
+	actionCount            uint64
+	rawActionSum           []float64
+	rawActionSquare        []float64
+	filteredActionSum      []float64
+	filteredActionSquare   []float64
+	deadZoneRemoved        []uint64
+	filterModified         []uint64
+	phaseCounts            map[int]uint64
+	failureReasons         map[string]uint64
+	contactSamples         uint64
+	attachmentSamples      uint64
 }
 
 // ActionStatistics makes the effect of task-side filtering visible. It allows
@@ -405,6 +409,7 @@ func (r *Runtime) cycle(ctx context.Context, descriptor TaskDescriptor) {
 		r.metrics.totalReward += float64(result.Reward)
 		if result.Done {
 			r.metrics.totalEpisodes++
+			r.recordEpisodeOutcome(result.Outcome == OutcomeSuccess)
 			if result.Outcome == OutcomeSuccess {
 				r.metrics.successes++
 			} else if reason, ok := result.Info["failure_reason_code"]; ok && reason > 0 {
@@ -666,7 +671,9 @@ func (r *Runtime) Snapshot() RuntimeSnapshot {
 	if r.replay != nil {
 		snapshot.ReplayBufferSize = r.replay.Len()
 	}
-	if r.metrics.totalEpisodes > 0 {
+	if rollingRate := r.rollingSuccessRate(); len(r.metrics.recentEpisodeSuccesses) > 0 {
+		snapshot.SuccessRate = rollingRate
+	} else if r.metrics.totalEpisodes > 0 {
 		snapshot.SuccessRate = float64(r.metrics.successes) / float64(r.metrics.totalEpisodes)
 	}
 	if r.metrics.totalSteps > 0 {
@@ -683,6 +690,28 @@ func (r *Runtime) Snapshot() RuntimeSnapshot {
 		snapshot.Workers[i] = WorkerSnapshot{ID: worker.id, EpisodeID: worker.episodeID, EpisodeStep: worker.episodeStep, State: append(State(nil), worker.state...), LastAction: append(Action(nil), worker.lastAction...), LastReward: worker.lastReward, EpisodeReward: worker.episodeReward, PolicyVersion: worker.episodePolicyVersion, Info: cloneInfo(worker.lastInfo), Outcome: worker.outcome, ActionSource: worker.actionSource, Metadata: metadata}
 	}
 	return snapshot
+}
+
+func (r *Runtime) rollingSuccessRate() float64 {
+	if len(r.metrics.recentEpisodeSuccesses) == 0 {
+		return 0
+	}
+	successes := 0
+	for _, succeeded := range r.metrics.recentEpisodeSuccesses {
+		if succeeded {
+			successes++
+		}
+	}
+	return float64(successes) / float64(len(r.metrics.recentEpisodeSuccesses))
+}
+
+func (r *Runtime) recordEpisodeOutcome(succeeded bool) {
+	if len(r.metrics.recentEpisodeSuccesses) < rollingSuccessWindowEpisodes {
+		r.metrics.recentEpisodeSuccesses = append(r.metrics.recentEpisodeSuccesses, succeeded)
+		return
+	}
+	r.metrics.recentEpisodeSuccesses[r.metrics.recentEpisodeIndex] = succeeded
+	r.metrics.recentEpisodeIndex = (r.metrics.recentEpisodeIndex + 1) % rollingSuccessWindowEpisodes
 }
 
 func (r *Runtime) actionStatistics() ActionStatistics {
