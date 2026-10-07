@@ -148,6 +148,7 @@ class LearnerServicer(learner_pb2_grpc.LearnerServiceServicer):
         self._best_success_rate = 0.0
         self._best_average_reward = float("-inf")
         self._high_success_streak = 0
+        self._stage1_frozen = False
         self._early_stopped = False
         self._last_metrics = self._empty_metrics()
         if payload is not None:
@@ -275,15 +276,70 @@ class LearnerServicer(learner_pb2_grpc.LearnerServiceServicer):
         for optimizer in (self._agent.actor_optimizer, self._agent.critic_one_optimizer, self._agent.critic_two_optimizer, self._agent.alpha_optimizer):
             optimizer.zero_grad(set_to_none=True)
 
-    def _rolling_success_rate(self) -> float:
+    def _rolling_success_rate(self, window: int | None = None) -> float:
         if not self._episode_results:
             return 0.0
-        return sum(1 for success, _ in self._episode_results if success) / len(self._episode_results)
+        history = list(self._episode_results)
+        if window is not None:
+            history = history[-window:]
+        if not history:
+            return 0.0
+        return sum(1 for success, _ in history if success) / len(history)
 
     def _rolling_average_reward(self) -> float:
         if not self._episode_results:
             return float("-inf")
         return sum(reward for _, reward in self._episode_results) / len(self._episode_results)
+
+    def _connectome_parameters(self) -> list[torch.nn.Parameter]:
+        actor = self._agent.actor
+        parameters: list[torch.nn.Parameter] = []
+        for name in (
+            "sensory_encoder",
+            "neuron_bias",
+            "leak_logit",
+            "edge_log_gains",
+            "motor_gain",
+            "motor_bias",
+            "latent_projection",
+            "base_head",
+            "transport_motor_gain",
+            "transport_motor_bias",
+        ):
+            module = getattr(actor, name, None)
+            if isinstance(module, torch.nn.Parameter):
+                parameters.append(module)
+            elif module is not None and hasattr(module, "parameters"):
+                parameters.extend(module.parameters())
+        return parameters
+
+    def _freeze_connectome_locked(self) -> None:
+        if self._stage1_frozen:
+            return
+        parameters = self._connectome_parameters()
+        if not parameters:
+            self._stage1_frozen = True
+            return
+        for parameter in parameters:
+            parameter.requires_grad_(False)
+        if hasattr(self._agent.actor, "residual_head"):
+            for parameter in self._agent.actor.residual_head.parameters():
+                parameter.requires_grad_(True)
+        if hasattr(self._agent.actor, "log_std"):
+            self._agent.actor.log_std.requires_grad_(True)
+        self._stage1_frozen = True
+        LOGGER.warning("[TRAIN STAGE 1] Connectome frozen at >= 80%% success. Stabilizing latent space.", extra={"fields": {"success_rate": self._rolling_success_rate(window=10), "episodes": len(self._episode_results)}})
+
+    def _save_production_checkpoint_locked(self, success_rate: float, average_reward: float) -> None:
+        path = checkpoint_path(self._config.checkpoint_dir, "best_production_checkpoint")
+        evaluation = self._evaluation_state()
+        evaluation["best_success_rate"] = success_rate
+        evaluation["best_average_reward"] = average_reward
+        payload = {"format_version": CHECKPOINT_FORMAT_VERSION, "model_name": "best_production_checkpoint", "learner_config": asdict(self._config), "agent": self._agent.checkpoint_state(), "samples_seen": self._samples_seen, "policy_version": self._policy_version, "training_step": self._training_step, "evaluation": evaluation}
+        atomic_save_checkpoint(path, payload)
+        self._best_success_rate = success_rate
+        self._best_average_reward = average_reward
+        LOGGER.warning("[PRODUCTION SAVE] Final checkpoint saved at deployment threshold.", extra={"fields": {"path": str(path), "success_rate": success_rate, "average_reward": average_reward}})
 
     def _freeze_learning_locked(self) -> None:
         self._zero_optimizer_gradients()
@@ -293,7 +349,14 @@ class LearnerServicer(learner_pb2_grpc.LearnerServiceServicer):
                 parameter.requires_grad_(False)
         self._agent.log_alpha.requires_grad_(False)
         self._early_stopped = True
-        LOGGER.warning("[EARLY STOPPING] Target accuracy achieved (>=99%%). Model frozen at peak performance.", extra={"fields": {"success_rate": self._rolling_success_rate(), "episodes": len(self._episode_results)}})
+        LOGGER.warning("[TRAIN STAGE 2] Target accuracy >= 90%% achieved. Training complete, policy locked for deployment.", extra={"fields": {"success_rate": self._rolling_success_rate(window=10), "episodes": len(self._episode_results)}})
+
+    def _lock_policy_for_deployment_locked(self) -> None:
+        if self._early_stopped:
+            return
+        self._config = replace(self._config, deterministic_inference=True)
+        self._freeze_learning_locked()
+        self._save_production_checkpoint_locked(self._rolling_success_rate(window=10), self._rolling_average_reward())
 
     def _evaluation_state(self) -> dict[str, object]:
         return {"best_success_rate": self._best_success_rate, "best_average_reward": self._best_average_reward, "high_success_streak": self._high_success_streak, "early_stopped": self._early_stopped, "episode_results": list(self._episode_results)}
@@ -330,13 +393,21 @@ class LearnerServicer(learner_pb2_grpc.LearnerServiceServicer):
         if not math.isfinite(average_reward):
             raise ValueError("episode reward must be finite")
         self._episode_results.append((bool(success), float(average_reward)))
-        success_rate = self._rolling_success_rate()
+        rolling_success_rate = self._rolling_success_rate(window=10)
+        if len(self._episode_results) >= 10 and rolling_success_rate >= 0.80 and not self._stage1_frozen:
+            self._freeze_connectome_locked()
         average = self._rolling_average_reward()
-        self._high_success_streak = self._high_success_streak + 1 if success_rate >= 0.99 else 0
-        if success_rate >= 0.985 and average > self._best_average_reward:
-            self._save_best_checkpoint_locked(success_rate, average)
-        if self._high_success_streak >= 100 and not self._early_stopped:
-            self._freeze_learning_locked()
+        if len(self._episode_results) >= 1:
+            if rolling_success_rate >= 0.90:
+                self._high_success_streak += 1
+            else:
+                self._high_success_streak = 0
+        else:
+            self._high_success_streak = 0
+        if rolling_success_rate >= 0.90 and average > self._best_average_reward:
+            self._save_best_checkpoint_locked(rolling_success_rate, average)
+        if self._high_success_streak >= 5 and not self._early_stopped:
+            self._lock_policy_for_deployment_locked()
 
     def record_episode_result(self, success: bool, average_reward: float) -> None:
         """Record an exact evaluation result from an external episode runner."""

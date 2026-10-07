@@ -7,6 +7,7 @@ import torch
 from ai.config import LearnerConfig
 from ai.checkpoints import validate_model_name
 from ai.grpc_server import LearnerServicer
+from ai.test_connectome import _graph
 from gen.python.learner.v1 import environment_pb2, learner_pb2, transition_pb2
 
 
@@ -131,10 +132,10 @@ def test_best_checkpoint_and_early_stopping_callback(tmp_path: Path):
     assert servicer._best_success_rate == pytest.approx(1.0)
     assert servicer._best_average_reward == pytest.approx(5.0)
 
-    for _ in range(99):
+    for _ in range(5):
         servicer.record_episode_result(True, 5.0)
     assert servicer._early_stopped
-    assert servicer._high_success_streak == 100
+    assert servicer._high_success_streak >= 5
 
     previous_step = servicer._training_step
     transitions = [transition_pb2.Transition(
@@ -145,3 +146,31 @@ def test_best_checkpoint_and_early_stopping_callback(tmp_path: Path):
     ) for _ in range(4)]
     result = servicer.TrainBatch(learner_pb2.TrainBatchRequest(batch=transition_pb2.TransitionBatch(transitions=transitions)), AbortContext())
     assert result.training_step == previous_step
+
+
+def test_two_stage_training_controller_freezes_connectome_then_locks_policy(tmp_path: Path):
+    graph = _graph(tmp_path)
+    graph_dir = tmp_path / "connectome_cache"
+    graph.save(graph_dir)
+    config = LearnerConfig(
+        state_dim=30,
+        action_dim=3,
+        controller_type="fly_connectome",
+        graph_path=str(graph_dir / "connectome_graph.npz"),
+        checkpoint_dir=str(tmp_path),
+    )
+    servicer = LearnerServicer(config)
+    for success in [True] * 8 + [False, False]:
+        servicer.record_episode_result(success, 1.0)
+
+    assert servicer._stage1_frozen
+    assert all(not parameter.requires_grad for parameter in servicer._agent.actor.sensory_encoder.parameters())
+    assert all(not parameter.requires_grad for parameter in servicer._agent.actor.base_head.parameters())
+    assert all(parameter.requires_grad for parameter in servicer._agent.actor.residual_head.parameters())
+
+    deployment_servicer = LearnerServicer(config)
+    for _ in range(5):
+        deployment_servicer.record_episode_result(True, 1.0)
+    assert deployment_servicer._early_stopped
+    assert deployment_servicer._config.deterministic_inference is True
+    assert (tmp_path / "best_production_checkpoint.pt").is_file()
