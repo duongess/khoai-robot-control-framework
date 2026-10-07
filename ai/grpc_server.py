@@ -34,6 +34,12 @@ from gen.python.learner.v1 import environment_pb2, learner_pb2, learner_pb2_grpc
 
 
 ADDRESS = os.getenv("LEARNER_ADDRESS", "127.0.0.1:50051")
+SUCCESS_WINDOW_EPISODES = 50
+BEST_SAVE_SUCCESS_RATE = 0.90
+STOP_SUCCESS_RATE = 0.95
+STOP_CONSECUTIVE_SUCCESSES = 20
+MAX_TRAINING_EPISODES = 150
+EARLY_STOP_MESSAGE = "[EARLY STOPPING TRIGGERED] Target achieved. Model locked at peak performance. Ready for evaluation."
 
 
 def _upgrade_legacy_default_grip(config: object) -> dict | None:
@@ -111,6 +117,10 @@ class LearnerServicer(learner_pb2_grpc.LearnerServiceServicer):
             # The caller may deliberately move their local checkpoint directory;
             # retain that location while restoring every training setting.
             self._config = replace(saved_config, checkpoint_dir=requested_config.checkpoint_dir)
+            if not self._eval_mode and isinstance(payload.get("evaluation"), dict) and payload["evaluation"].get("early_stopped") is True and payload["evaluation"].get("early_stopping_schema") != 1:
+                # The old success gate forced deterministic inference before
+                # saving. Restore exploration when resuming that run.
+                self._config = replace(self._config, deterministic_inference=False)
         self._agent = SACAgent(SACConfig(
             state_dim=self._config.state_dim,
             action_dim=self._config.action_dim,
@@ -166,13 +176,15 @@ class LearnerServicer(learner_pb2_grpc.LearnerServiceServicer):
         self._training_step = 0
         self._predict_requests = 0
         self._train_requests = 0
-        self._episode_results = deque(maxlen=100)
-        self._episode_keys: set[tuple[object, ...]] = set()
+        self._episode_results = deque(maxlen=SUCCESS_WINDOW_EPISODES)
+        self._reported_episode_ids: set[str] = set()
+        self._completed_episodes = 0
+        self._consecutive_successes = 0
         self._best_success_rate = 0.0
         self._best_average_reward = float("-inf")
-        self._high_success_streak = 0
-        self._stage1_frozen = False
+        self._best_window_episodes = 0
         self._early_stopped = False
+        self._stop_reason = ""
         self._last_metrics = self._empty_metrics()
         if self._config.controller_type in {"fly_connectome", "random_graph"}:
             self._re_enable_connectome_gradients()
@@ -270,28 +282,24 @@ class LearnerServicer(learner_pb2_grpc.LearnerServiceServicer):
                     actor_log_std_vertical=metrics["actor_log_std_vertical"],
                     actor_log_std_gripper=metrics["actor_log_std_gripper"],
                 )
-            self._record_terminal_transitions(request.batch.transitions)
             # The Go runtime already applies backpressure, and this lock also
             # makes the service safe if another client submits a train request.
             # Prediction continues against its prior immutable snapshot while
             # the live actor/critics perform a backward pass.
             with self._training_lock:
                 if self._early_stopped:
-                    self._zero_optimizer_gradients()
                     metrics = dict(self._last_metrics)
                 else:
                     metrics = self._agent.update(batch)
-                if not self._early_stopped:
                     snapshot = deepcopy(self._agent.actor).eval()
                     with self._policy_lock:
                         self._policy_version += 1
                         self._actor_snapshots[self._policy_version] = snapshot
                         while len(self._actor_snapshots) > self._config.max_policy_snapshots:
                             del self._actor_snapshots[min(self._actor_snapshots)]
-                # Keep counters in the same critical section as weights and
-                # policy publication so a concurrent checkpoint is coherent.
-                self._samples_seen += len(request.batch.transitions)
-                if not self._early_stopped:
+                    # Keep counters in the same critical section as weights and
+                    # policy publication so a concurrent checkpoint is coherent.
+                    self._samples_seen += len(request.batch.transitions)
                     self._training_step += 1
         except ValueError as error:
             context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(error))
@@ -319,10 +327,6 @@ class LearnerServicer(learner_pb2_grpc.LearnerServiceServicer):
     @staticmethod
     def _empty_metrics() -> dict[str, float]:
         return {"actor_loss": 0.0, "alpha_loss": 0.0, "entropy": 0.0, "critic_one_loss": 0.0, "critic_two_loss": 0.0, "critic_one_q": 0.0, "critic_two_q": 0.0, "alpha": 1.0, "actor_log_std_horizontal": 0.0, "actor_log_std_vertical": 0.0, "actor_log_std_gripper": 0.0}
-
-    def _zero_optimizer_gradients(self) -> None:
-        for optimizer in (self._agent.actor_optimizer, self._agent.critic_one_optimizer, self._agent.critic_two_optimizer, self._agent.alpha_optimizer):
-            optimizer.zero_grad(set_to_none=True)
 
     def _rolling_success_rate(self, window: int | None = None) -> float:
         if not self._episode_results:
@@ -387,66 +391,56 @@ class LearnerServicer(learner_pb2_grpc.LearnerServiceServicer):
                 for parameter in module.parameters():
                     parameter.requires_grad_(True)
 
-    def _freeze_connectome_locked(self) -> None:
-        # Early connectome freezing is disabled by policy. The graph must remain
-        # trainable throughout the run so small-sample success spikes do not lock
-        # a partially converged policy before it has truly learned.
-        self._re_enable_connectome_gradients()
-        self._stage1_frozen = False
-        LOGGER.warning("[TRAIN STAGE 1] Connectome freeze hook disabled; all graph parameters remain trainable.", extra={"fields": {"success_rate": self._rolling_success_rate(window=20), "episodes": len(self._episode_results)}})
-
-    def _save_production_checkpoint_locked(self, success_rate: float, average_reward: float) -> None:
-        path = checkpoint_path(self._config.checkpoint_dir, "best_production_checkpoint")
-        evaluation = self._evaluation_state()
-        evaluation["best_success_rate"] = success_rate
-        evaluation["best_average_reward"] = average_reward
-        payload = {"format_version": CHECKPOINT_FORMAT_VERSION, "model_name": "best_production_checkpoint", "learner_config": asdict(self._config), "agent": self._agent.checkpoint_state(), "samples_seen": self._samples_seen, "policy_version": self._policy_version, "training_step": self._training_step, "evaluation": evaluation}
-        atomic_save_checkpoint(path, payload)
-        self._best_success_rate = success_rate
-        self._best_average_reward = average_reward
-        LOGGER.warning("[PRODUCTION SAVE] Final checkpoint saved at deployment threshold.", extra={"fields": {"path": str(path), "success_rate": success_rate, "average_reward": average_reward}})
-
-    def _freeze_learning_locked(self) -> None:
-        self._zero_optimizer_gradients()
-        for module in (self._agent.actor, self._agent.critic_one, self._agent.critic_two):
-            module.eval()
-            for parameter in module.parameters():
-                parameter.requires_grad_(False)
-        self._agent.log_alpha.requires_grad_(False)
-        self._early_stopped = True
-        LOGGER.warning("[TRAIN STAGE 2] Target accuracy >= 90%% achieved. Training complete, policy locked for deployment.", extra={"fields": {"success_rate": self._rolling_success_rate(window=10), "episodes": len(self._episode_results)}})
-
-    def _lock_policy_for_deployment_locked(self) -> None:
-        if self._early_stopped:
-            return
-        self._config = replace(self._config, deterministic_inference=True)
-        self._freeze_learning_locked()
-        self._save_production_checkpoint_locked(self._rolling_success_rate(window=10), self._rolling_average_reward())
-
     def _evaluation_state(self) -> dict[str, object]:
-        return {"best_success_rate": self._best_success_rate, "best_average_reward": self._best_average_reward, "high_success_streak": self._high_success_streak, "early_stopped": self._early_stopped, "episode_results": list(self._episode_results)}
+        return {
+            "early_stopping_schema": 1,
+            "best_success_rate": self._best_success_rate,
+            "best_average_reward": self._best_average_reward,
+            "best_window_episodes": self._best_window_episodes,
+            "completed_episodes": self._completed_episodes,
+            "consecutive_successes": self._consecutive_successes,
+            "early_stopped": self._early_stopped,
+            "stop_reason": self._stop_reason,
+            "episode_results": list(self._episode_results),
+        }
 
     def _restore_evaluation_state(self, payload: object) -> None:
         if not isinstance(payload, dict):
             return
         results = payload.get("episode_results")
         if isinstance(results, list):
-            for item in results[-100:]:
+            for item in results[-SUCCESS_WINDOW_EPISODES:]:
                 if isinstance(item, (list, tuple)) and len(item) == 2 and isinstance(item[0], bool) and isinstance(item[1], (int, float)) and math.isfinite(float(item[1])):
                     self._episode_results.append((item[0], float(item[1])))
-        if isinstance(payload.get("best_success_rate"), (int, float)) and math.isfinite(float(payload["best_success_rate"])):
+        count = payload.get("completed_episodes")
+        self._completed_episodes = count if isinstance(count, int) and count >= len(self._episode_results) else len(self._episode_results)
+        streak = payload.get("consecutive_successes")
+        if isinstance(streak, int) and streak >= 0:
+            self._consecutive_successes = streak
+        else:
+            for success, _ in reversed(self._episode_results):
+                if not success:
+                    break
+                self._consecutive_successes += 1
+        if payload.get("best_window_episodes") == SUCCESS_WINDOW_EPISODES and isinstance(payload.get("best_success_rate"), (int, float)) and math.isfinite(float(payload["best_success_rate"])):
             self._best_success_rate = float(payload["best_success_rate"])
+            self._best_window_episodes = SUCCESS_WINDOW_EPISODES
         if isinstance(payload.get("best_average_reward"), (int, float)) and math.isfinite(float(payload["best_average_reward"])):
             self._best_average_reward = float(payload["best_average_reward"])
-        if isinstance(payload.get("high_success_streak"), int) and payload["high_success_streak"] >= 0:
-            self._high_success_streak = payload["high_success_streak"]
-        if payload.get("early_stopped") is True:
-            self._freeze_learning_locked()
+        if payload.get("early_stopping_schema") == 1 and payload.get("early_stopped") is True:
+            self._early_stopped = True
+            self._stop_reason = str(payload.get("stop_reason", ""))
+            self._config = replace(self._config, deterministic_inference=True)
+        elif self._completed_episodes >= MAX_TRAINING_EPISODES:
+            self._early_stopped = True
+            self._stop_reason = "max_episodes"
+            self._config = replace(self._config, deterministic_inference=True)
 
     def _save_best_checkpoint_locked(self, success_rate: float, average_reward: float) -> None:
         evaluation = self._evaluation_state()
         evaluation["best_success_rate"] = success_rate
         evaluation["best_average_reward"] = average_reward
+        evaluation["best_window_episodes"] = len(self._episode_results)
         paths = [checkpoint_path(self._config.checkpoint_dir, name) for name in self._best_checkpoint_names()]
         saved_paths = []
         for path in paths:
@@ -455,64 +449,76 @@ class LearnerServicer(learner_pb2_grpc.LearnerServiceServicer):
             saved_paths.append(str(path))
         self._best_success_rate = success_rate
         self._best_average_reward = average_reward
+        self._best_window_episodes = len(self._episode_results)
         LOGGER.warning("[AUTO-SAVE] New best model saved with Success Rate: %.1f%%!", success_rate * 100.0, extra={"fields": {"paths": saved_paths, "average_reward": average_reward}})
 
+    def _mark_best_checkpoint_stopped_locked(self) -> None:
+        """Persist the stop flag without replacing the earlier peak weights."""
+        for name in self._best_checkpoint_names():
+            path = checkpoint_path(self._config.checkpoint_dir, name)
+            if not path.is_file():
+                continue
+            payload = load_checkpoint(path)
+            payload["evaluation"] = self._evaluation_state()
+            atomic_save_checkpoint(path, payload)
+
     def _record_episode_result_locked(self, success: bool, average_reward: float) -> None:
+        if self._early_stopped:
+            return
         if not math.isfinite(average_reward):
             raise ValueError("episode reward must be finite")
         self._episode_results.append((bool(success), float(average_reward)))
-        rolling_success_rate = self._rolling_success_rate(window=10)
-        if len(self._episode_results) >= 30 and self._rolling_success_rate(window=20) >= 0.85 and not self._stage1_frozen:
-            # The runtime freeze hook is intentionally disabled. If a team wants a
-            # late-stage freeze, it must wait until at least episode 30 with a
-            # 20-episode rolling success rate >= 85% and must still keep the graph
-            # trainable until that explicit gate is reached.
-            self._re_enable_connectome_gradients()
-            self._stage1_frozen = False
+        self._completed_episodes += 1
+        self._consecutive_successes = self._consecutive_successes + 1 if success else 0
+        full_window = len(self._episode_results) == SUCCESS_WINDOW_EPISODES
+        rolling_success_rate = self._rolling_success_rate(window=SUCCESS_WINDOW_EPISODES)
         average = self._rolling_average_reward()
-        if len(self._episode_results) >= 1:
-            if rolling_success_rate >= 0.90:
-                self._high_success_streak += 1
-            else:
-                self._high_success_streak = 0
-        else:
-            self._high_success_streak = 0
-        if (rolling_success_rate > self._best_success_rate + 1e-9) or (abs(rolling_success_rate - self._best_success_rate) <= 1e-9 and average > self._best_average_reward):
+        if full_window and rolling_success_rate >= STOP_SUCCESS_RATE:
+            self._stop_reason = "rolling_success_rate"
+        elif self._consecutive_successes >= STOP_CONSECUTIVE_SUCCESSES:
+            self._stop_reason = "consecutive_successes"
+        elif self._completed_episodes >= MAX_TRAINING_EPISODES:
+            self._stop_reason = "max_episodes"
+        if self._stop_reason:
+            self._early_stopped = True
+            self._config = replace(self._config, deterministic_inference=True)
+
+        new_best = full_window and rolling_success_rate >= BEST_SAVE_SUCCESS_RATE and rolling_success_rate > self._best_success_rate + 1e-9
+        if new_best:
             self._save_best_checkpoint_locked(rolling_success_rate, average)
-        if self._high_success_streak >= 5 and not self._early_stopped:
-            self._lock_policy_for_deployment_locked()
+        elif self._early_stopped:
+            production_path = checkpoint_path(self._config.checkpoint_dir, "best_production_checkpoint")
+            if self._best_success_rate == 0 or not production_path.is_file():
+                # A 20-success streak may end training before a full 50-episode
+                # window exists. Preserve that model before leaving training.
+                self._save_best_checkpoint_locked(rolling_success_rate, average)
+            else:
+                self._mark_best_checkpoint_stopped_locked()
+        if self._early_stopped:
+            print(EARLY_STOP_MESSAGE, flush=True)
 
     def record_episode_result(self, success: bool, average_reward: float) -> None:
-        """Record an exact evaluation result from an external episode runner."""
+        """Record one completed episode from an in-process episode runner."""
         with self._training_lock:
             self._record_episode_result_locked(success, float(average_reward))
 
-    @staticmethod
-    def _terminal_success(transition) -> bool:
-        if transition.truncated:
-            return False
-        values = list(transition.next_state.values)
-        if len(values) > 19 and math.isfinite(float(values[19])):
-            phase_code = round((float(values[19]) + 1.0) * 4.5)
-            if phase_code == 8:
-                return True
-            if phase_code == 9:
-                return False
-        return float(transition.reward) > 0.0
-
-    def _record_terminal_transitions(self, transitions) -> None:
-        with self._training_lock:
-            for transition in transitions:
-                if not (transition.terminated or transition.truncated):
-                    continue
-                episode_id = transition.episode_id
-                key = (episode_id, int(transition.step)) if episode_id else ("terminal", tuple(round(float(value), 6) for value in transition.next_state.values), round(float(transition.reward), 6), bool(transition.truncated))
-                if key in self._episode_keys:
-                    continue
-                self._episode_keys.add(key)
-                self._record_episode_result_locked(self._terminal_success(transition), float(transition.reward))
-                if len(self._episode_keys) > 10000:
-                    self._episode_keys.clear()
+    def RecordEpisodeResult(self, request, context):
+        if not request.episode_id or not math.isfinite(float(request.episode_reward)):
+            context.abort(grpc.StatusCode.INVALID_ARGUMENT, "episode result requires an ID and finite reward")
+        try:
+            with self._training_lock:
+                if request.episode_id not in self._reported_episode_ids:
+                    self._record_episode_result_locked(bool(request.success), float(request.episode_reward))
+                    self._reported_episode_ids.add(request.episode_id)
+                return learner_pb2.RecordEpisodeResultResponse(
+                    stop_training=self._early_stopped,
+                    completed_episodes=self._completed_episodes,
+                    rolling_success_rate=self._rolling_success_rate(window=SUCCESS_WINDOW_EPISODES),
+                    consecutive_successes=self._consecutive_successes,
+                    reason=self._stop_reason,
+                )
+        except ValueError as error:
+            context.abort(grpc.StatusCode.INTERNAL, str(error))
 
     def HealthCheck(self, request, context):
         return learner_pb2.HealthCheckResponse(
@@ -568,8 +574,6 @@ class LearnerServicer(learner_pb2_grpc.LearnerServiceServicer):
             # resumed model is not accidentally re-frozen for 128 updates.
             self._agent.training_step = self._training_step
             self._agent._configure_actor_trainability()
-            if self._early_stopped:
-                self._freeze_learning_locked()
         except (KeyError, TypeError, ValueError) as error:
             raise ValueError(f"could not restore checkpoint {checkpoint.name}: {error}") from error
         # Episode snapshots intentionally do not survive a process restart.

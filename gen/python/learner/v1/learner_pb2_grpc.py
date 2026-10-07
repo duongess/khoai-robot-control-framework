@@ -54,6 +54,11 @@ class LearnerServiceStub:
                 request_serializer=learner_dot_v1_dot_learner__pb2.SaveCheckpointRequest.SerializeToString,
                 response_deserializer=learner_dot_v1_dot_learner__pb2.SaveCheckpointResponse.FromString,
                 _registered_method=True)
+        self.RecordEpisodeResult = channel.unary_unary(
+                '/learner.v1.LearnerService/RecordEpisodeResult',
+                request_serializer=learner_dot_v1_dot_learner__pb2.RecordEpisodeResultRequest.SerializeToString,
+                response_deserializer=learner_dot_v1_dot_learner__pb2.RecordEpisodeResultResponse.FromString,
+                _registered_method=True)
 
 
 class LearnerServiceServicer:
@@ -83,6 +88,12 @@ class LearnerServiceServicer:
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def RecordEpisodeResult(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_LearnerServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -105,6 +116,11 @@ def add_LearnerServiceServicer_to_server(servicer, server):
                     servicer.SaveCheckpoint,
                     request_deserializer=learner_dot_v1_dot_learner__pb2.SaveCheckpointRequest.FromString,
                     response_serializer=learner_dot_v1_dot_learner__pb2.SaveCheckpointResponse.SerializeToString,
+            ),
+            'RecordEpisodeResult': grpc.unary_unary_rpc_method_handler(
+                    servicer.RecordEpisodeResult,
+                    request_deserializer=learner_dot_v1_dot_learner__pb2.RecordEpisodeResultRequest.FromString,
+                    response_serializer=learner_dot_v1_dot_learner__pb2.RecordEpisodeResultResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -215,6 +231,33 @@ class LearnerService:
             '/learner.v1.LearnerService/SaveCheckpoint',
             learner_dot_v1_dot_learner__pb2.SaveCheckpointRequest.SerializeToString,
             learner_dot_v1_dot_learner__pb2.SaveCheckpointResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def RecordEpisodeResult(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/learner.v1.LearnerService/RecordEpisodeResult',
+            learner_dot_v1_dot_learner__pb2.RecordEpisodeResultRequest.SerializeToString,
+            learner_dot_v1_dot_learner__pb2.RecordEpisodeResultResponse.FromString,
             options,
             channel_credentials,
             insecure,

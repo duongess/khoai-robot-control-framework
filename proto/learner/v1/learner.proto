@@ -68,9 +68,27 @@ message SaveCheckpointResponse {
   uint64 training_step = 3;
 }
 
+// Report one completed environment episode when it happens. Replay samples
+// cannot be used for stopping because terminal transitions are sampled late
+// and may never be sampled at all.
+message RecordEpisodeResultRequest {
+  string episode_id = 1;
+  bool success = 2;
+  float episode_reward = 3;
+}
+
+message RecordEpisodeResultResponse {
+  bool stop_training = 1;
+  uint64 completed_episodes = 2;
+  float rolling_success_rate = 3;
+  uint64 consecutive_successes = 4;
+  string reason = 5;
+}
+
 service LearnerService {
   rpc PredictBatch(PredictBatchRequest) returns (PredictBatchResponse);
   rpc TrainBatch(TrainBatchRequest) returns (TrainBatchResponse);
   rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
   rpc SaveCheckpoint(SaveCheckpointRequest) returns (SaveCheckpointResponse);
+  rpc RecordEpisodeResult(RecordEpisodeResultRequest) returns (RecordEpisodeResultResponse);
 }

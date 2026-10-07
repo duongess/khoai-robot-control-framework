@@ -6,7 +6,7 @@ import torch
 
 from ai.config import LearnerConfig
 from ai.checkpoints import validate_model_name
-from ai.grpc_server import LearnerServicer
+from ai.grpc_server import EARLY_STOP_MESSAGE, LearnerServicer
 from ai.test_connectome import _graph
 from gen.python.learner.v1 import environment_pb2, learner_pb2, transition_pb2
 
@@ -122,20 +122,26 @@ def test_checkpoint_model_name_rejects_paths_and_unsafe_names(name: str):
         validate_model_name(name)
 
 
-def test_best_checkpoint_and_early_stopping_callback(tmp_path: Path):
+def test_best_checkpoint_uses_complete_50_episode_window_and_new_high(tmp_path: Path):
     config = LearnerConfig(state_dim=3, action_dim=3, checkpoint_dir=str(tmp_path))
     servicer = LearnerServicer(config, model_name="grasp-v1")
 
+    best_path = tmp_path / "best_production_checkpoint.pt"
+    for index in range(49):
+        servicer.record_episode_result(index % 10 != 0, 5.0)
+    assert not best_path.exists()
     servicer.record_episode_result(True, 5.0)
-    best_path = tmp_path / "best_model_checkpoint.pt"
+    assert servicer._best_success_rate == pytest.approx(0.90)
     assert best_path.is_file()
-    assert servicer._best_success_rate == pytest.approx(1.0)
-    assert servicer._best_average_reward == pytest.approx(5.0)
+    first = torch.load(best_path, map_location="cpu", weights_only=True)
+    assert first["evaluation"]["best_window_episodes"] == 50
 
-    for _ in range(5):
-        servicer.record_episode_result(True, 5.0)
-    assert servicer._early_stopped
-    assert servicer._high_success_streak >= 5
+    servicer.record_episode_result(True, 5.0)
+    assert servicer._best_success_rate == pytest.approx(0.92)
+    improved = torch.load(best_path, map_location="cpu", weights_only=True)
+    assert improved["evaluation"]["best_success_rate"] == pytest.approx(0.92)
+    assert not servicer._early_stopped
+    assert not servicer._config.deterministic_inference
 
     previous_step = servicer._training_step
     transitions = [transition_pb2.Transition(
@@ -145,7 +151,36 @@ def test_best_checkpoint_and_early_stopping_callback(tmp_path: Path):
         next_state=environment_pb2.State(values=[0.1, 0.2, 0.3]),
     ) for _ in range(4)]
     result = servicer.TrainBatch(learner_pb2.TrainBatchRequest(batch=transition_pb2.TransitionBatch(transitions=transitions)), AbortContext())
-    assert result.training_step == previous_step
+    assert result.training_step == previous_step + 1
+    assert result.policy_version == 2
+
+
+def test_legacy_locked_checkpoint_resumes_training(tmp_path: Path):
+    config = LearnerConfig(state_dim=3, action_dim=3, checkpoint_dir=str(tmp_path))
+    servicer = LearnerServicer(config, model_name="legacy-locked")
+    servicer.SaveCheckpoint(learner_pb2.SaveCheckpointRequest(), AbortContext())
+    path = tmp_path / "legacy-locked.pt"
+    payload = torch.load(path, map_location="cpu", weights_only=True)
+    payload["evaluation"]["early_stopped"] = True
+    payload["evaluation"].pop("early_stopping_schema")
+    payload["learner_config"]["deterministic_inference"] = True
+    torch.save(payload, path)
+
+    resumed = LearnerServicer(config, model_name="legacy-locked")
+    assert not resumed._early_stopped
+    assert not resumed._config.deterministic_inference
+    assert all(parameter.requires_grad for parameter in resumed._agent.actor.parameters())
+    assert resumed._agent.log_alpha.requires_grad
+
+    transitions = [transition_pb2.Transition(
+        state=environment_pb2.State(values=[0.0, 0.1, 0.2]),
+        action=environment_pb2.Action(values=[0.0, 0.0, 0.0]),
+        reward=1.0,
+        next_state=environment_pb2.State(values=[0.1, 0.2, 0.3]),
+    ) for _ in range(4)]
+    result = resumed.TrainBatch(learner_pb2.TrainBatchRequest(batch=transition_pb2.TransitionBatch(transitions=transitions)), AbortContext())
+    assert result.training_step == 1
+    assert result.policy_version == 2
 
 
 def test_eval_mode_skips_training_and_loads_best_checkpoint(tmp_path: Path):
@@ -170,7 +205,7 @@ def test_eval_mode_skips_training_and_loads_best_checkpoint(tmp_path: Path):
     assert servicer._agent.actor.training is False
 
 
-def test_two_stage_training_controller_keeps_connectome_trainable_until_real_thresholds(tmp_path: Path):
+def test_connectome_stops_after_20_consecutive_successes_and_locks_weights(tmp_path: Path, capsys):
     graph = _graph(tmp_path)
     graph_dir = tmp_path / "connectome_cache"
     graph.save(graph_dir)
@@ -185,14 +220,62 @@ def test_two_stage_training_controller_keeps_connectome_trainable_until_real_thr
     for success in [True] * 4 + [False] + [True] * 4:
         servicer.record_episode_result(success, 1.0)
 
-    assert not servicer._stage1_frozen
     assert all(parameter.requires_grad for parameter in servicer._agent.actor.sensory_encoder.parameters())
     assert all(parameter.requires_grad for parameter in servicer._agent.actor.base_head.parameters())
     assert servicer._agent.actor.edge_log_gains.requires_grad
 
     deployment_servicer = LearnerServicer(config)
-    for _ in range(5):
+    for _ in range(19):
         deployment_servicer.record_episode_result(True, 1.0)
+    assert not deployment_servicer._early_stopped
+    deployment_servicer.record_episode_result(True, 1.0)
     assert deployment_servicer._early_stopped
-    assert deployment_servicer._config.deterministic_inference is True
+    assert deployment_servicer._stop_reason == "consecutive_successes"
+    assert deployment_servicer._config.deterministic_inference
+    assert EARLY_STOP_MESSAGE in capsys.readouterr().out
+    sensory_weight = next(deployment_servicer._agent.actor.sensory_encoder.parameters())
+    before = sensory_weight.detach().clone()
+    transitions = [transition_pb2.Transition(
+        state=environment_pb2.State(values=[0.1] * 30),
+        action=environment_pb2.Action(values=[0.0, 0.0, 0.0]),
+        reward=1.0,
+        next_state=environment_pb2.State(values=[0.2] * 30),
+    ) for _ in range(4)]
+    result = deployment_servicer.TrainBatch(learner_pb2.TrainBatchRequest(batch=transition_pb2.TransitionBatch(transitions=transitions)), AbortContext())
+    assert result.training_step == 0
+    assert torch.equal(before, sensory_weight)
     assert (tmp_path / "best_production_checkpoint.pt").is_file()
+    restored = LearnerServicer(config, model_name="best_production_checkpoint")
+    assert restored._early_stopped
+    assert restored._completed_episodes == 20
+
+
+def test_rolling_95_percent_stops_after_50_episodes(tmp_path: Path):
+    servicer = LearnerServicer(LearnerConfig(state_dim=3, action_dim=3, checkpoint_dir=str(tmp_path)))
+    outcomes = [index not in {15, 35} for index in range(50)]
+    for success in outcomes:
+        servicer.record_episode_result(success, 1.0)
+    assert servicer._completed_episodes == 50
+    assert servicer._best_success_rate == pytest.approx(0.96)
+    assert servicer._stop_reason == "rolling_success_rate"
+    assert (tmp_path / "best_production_checkpoint.pt").is_file()
+
+
+def test_hard_limit_stops_at_150_and_saves_fallback_checkpoint(tmp_path: Path):
+    servicer = LearnerServicer(LearnerConfig(state_dim=3, action_dim=3, checkpoint_dir=str(tmp_path)))
+    for index in range(150):
+        servicer.record_episode_result(index % 2 == 0, 1.0)
+    assert servicer._completed_episodes == 150
+    assert servicer._stop_reason == "max_episodes"
+    assert servicer._early_stopped
+    assert (tmp_path / "best_production_checkpoint.pt").is_file()
+
+
+def test_episode_result_rpc_is_idempotent_and_uses_completed_episodes(tmp_path: Path):
+    servicer = LearnerServicer(LearnerConfig(state_dim=3, action_dim=3, checkpoint_dir=str(tmp_path)))
+    request = learner_pb2.RecordEpisodeResultRequest(episode_id="run-1", success=True, episode_reward=2.0)
+    first = servicer.RecordEpisodeResult(request, AbortContext())
+    duplicate = servicer.RecordEpisodeResult(request, AbortContext())
+    assert first.completed_episodes == duplicate.completed_episodes == 1
+    assert first.consecutive_successes == duplicate.consecutive_successes == 1
+    assert not first.stop_training

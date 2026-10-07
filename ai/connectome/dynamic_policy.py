@@ -195,7 +195,9 @@ def _apply_gantry_task_flow(
     if observation.shape[1] <= 20:
         return {}
     attached = observation[:, 15] > 0.5
-    aligned_with_object = torch.abs(observation[:, 10]) < 0.10
+    # The signed X error is divided by the 6 m default workspace length.
+    # Keep the gripper at transit height until the 0.15 m descent gate.
+    aligned_with_object = torch.abs(observation[:, 10]) < 0.15 / 6.0
     phase_code = torch.round((observation[:, 19] + 1.0) * 4.5).to(torch.int64)
     phase_lower = attached & (phase_code == 6)
     phase_release = phase_code >= 7
@@ -203,11 +205,12 @@ def _apply_gantry_task_flow(
     ax, bx = parameters["channel_0.a"], parameters["channel_0.b"]
     ay, by = parameters["channel_1.a"], parameters["channel_1.b"]
     x_object = observation[:, 10]
-    x_far = x_object + bx / ax
-    x_signal = torch.where(attached, -observation[:, 12], x_object)
-    # Away from the object, route a bias-cancelled error so b_x cannot reverse
-    # the sign of -a_x*x while the carriage is crossing the workspace.
-    x_signal = torch.where(~attached & ~aligned_with_object, x_far, x_signal)
+    approach_band = (torch.abs(x_object) >= 0.15 / 6.0) & (torch.abs(x_object) <= 0.60 / 6.0)
+    tracking_gain = torch.where(approach_band, 3.0, 1.0)
+    # Cancel the learned intercept during approach. Even at the minimum
+    # a_x=0.5, a 0.15 m error commands 0.0375, above the 0.02 movement gate.
+    x_approach = tracking_gain * x_object + bx / ax
+    x_signal = torch.where(attached, -observation[:, 12], x_approach)
     carry_error = observation[:, 1] - 1.00
     release_error = observation[:, 1] - 0.25
     # Keep the reflex error positive even at the release-height boundary.

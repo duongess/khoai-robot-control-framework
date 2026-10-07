@@ -28,7 +28,7 @@ def test_graph_learner_boot_registers_default_gantry_reflex_before_snapshot(tmp_
     assert len(snapshot.get_extra_state()["reflex_config"]["channels"]) == 3
 
     state = torch.zeros((1, 30))
-    state[:, 10] = -0.05  # carriage aligned within descent gate: drive right
+    state[:, 10] = -0.01  # 6 cm: carriage aligned within the 15 cm descent gate
     state[:, 11] = 0.5   # gripper above object: drive down
     action, reflex, residual, _ = snapshot.sample_decomposed(state, deterministic=True)
     assert action[0, 0] > 0

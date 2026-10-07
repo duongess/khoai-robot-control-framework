@@ -101,3 +101,27 @@ class SaveCheckpointResponse(_message.Message):
     policy_version: int
     training_step: int
     def __init__(self, model_name: _Optional[str] = ..., policy_version: _Optional[int] = ..., training_step: _Optional[int] = ...) -> None: ...
+
+class RecordEpisodeResultRequest(_message.Message):
+    __slots__ = ("episode_id", "success", "episode_reward")
+    EPISODE_ID_FIELD_NUMBER: _ClassVar[int]
+    SUCCESS_FIELD_NUMBER: _ClassVar[int]
+    EPISODE_REWARD_FIELD_NUMBER: _ClassVar[int]
+    episode_id: str
+    success: bool
+    episode_reward: float
+    def __init__(self, episode_id: _Optional[str] = ..., success: _Optional[bool] = ..., episode_reward: _Optional[float] = ...) -> None: ...
+
+class RecordEpisodeResultResponse(_message.Message):
+    __slots__ = ("stop_training", "completed_episodes", "rolling_success_rate", "consecutive_successes", "reason")
+    STOP_TRAINING_FIELD_NUMBER: _ClassVar[int]
+    COMPLETED_EPISODES_FIELD_NUMBER: _ClassVar[int]
+    ROLLING_SUCCESS_RATE_FIELD_NUMBER: _ClassVar[int]
+    CONSECUTIVE_SUCCESSES_FIELD_NUMBER: _ClassVar[int]
+    REASON_FIELD_NUMBER: _ClassVar[int]
+    stop_training: bool
+    completed_episodes: int
+    rolling_success_rate: float
+    consecutive_successes: int
+    reason: str
+    def __init__(self, stop_training: _Optional[bool] = ..., completed_episodes: _Optional[int] = ..., rolling_success_rate: _Optional[float] = ..., consecutive_successes: _Optional[int] = ..., reason: _Optional[str] = ...) -> None: ...

@@ -225,6 +225,7 @@ func (r *Runtime) Start(ctx context.Context) error {
 	}
 	loopContext, cancel := context.WithCancel(ctx)
 	r.workers, r.cancel, r.done, r.status, r.lastError = workers, cancel, make(chan struct{}), RuntimeRunning, ""
+	r.runID = uint64(time.Now().UnixNano())
 	now := time.Now()
 	r.metrics.startedAt, r.metrics.lastProgressAt, r.metrics.rateStartedAt = now, now, now
 	r.metrics.rateStartSteps, r.metrics.rateStartEpisodes = r.metrics.totalSteps, r.metrics.totalEpisodes
@@ -414,6 +415,23 @@ func (r *Runtime) cycle(ctx context.Context, descriptor TaskDescriptor) {
 				r.metrics.successes++
 			} else if reason, ok := result.Info["failure_reason_code"]; ok && reason > 0 {
 				r.metrics.failureReasons[fmt.Sprintf("reason_%d", int(reason))]++
+			}
+			if reporter, ok := r.learner.(EpisodeResultLearner); ok {
+				stop, reportErr := reporter.RecordEpisodeResult(ctx, EpisodeResult{
+					ID:      fmt.Sprintf("%d-%d-%d", r.runID, worker.id, worker.episodeID),
+					Success: result.Outcome == OutcomeSuccess,
+					Reward:  worker.episodeReward,
+				})
+				if reportErr != nil {
+					r.lastError = fmt.Sprintf("record episode result: %v", reportErr)
+					r.status = RuntimeError
+					return
+				}
+				if stop.StopTraining {
+					worker.state = append(State(nil), result.State...)
+					r.status = RuntimePaused
+					return
+				}
 			}
 			state, resetErr := worker.task.Reset()
 			if resetErr != nil {

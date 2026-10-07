@@ -31,6 +31,26 @@ type CheckpointingLearner interface {
 	SaveCheckpoint(context.Context) (CheckpointResult, error)
 }
 
+// EpisodeResultLearner receives completed episodes directly from the runtime.
+// Replay sampling is not an authoritative source for episode counts.
+type EpisodeResultLearner interface {
+	RecordEpisodeResult(context.Context, EpisodeResult) (EpisodeStopResult, error)
+}
+
+type EpisodeResult struct {
+	ID      string
+	Success bool
+	Reward  float64
+}
+
+type EpisodeStopResult struct {
+	StopTraining         bool
+	CompletedEpisodes    uint64
+	RollingSuccessRate   float64
+	ConsecutiveSuccesses uint64
+	Reason               string
+}
+
 type HealthStatus struct {
 	Ready         bool
 	PolicyVersion uint64
@@ -74,6 +94,28 @@ type LearnerClient struct {
 	conn    *grpc.ClientConn
 	client  learnerv1.LearnerServiceClient
 	timeout time.Duration
+}
+
+func (c *LearnerClient) RecordEpisodeResult(ctx context.Context, episode EpisodeResult) (EpisodeStopResult, error) {
+	if episode.ID == "" || math.IsNaN(episode.Reward) || math.IsInf(episode.Reward, 0) {
+		return EpisodeStopResult{}, errors.New("episode result requires an ID and finite reward")
+	}
+	callContext, cancel, err := c.requestContext(ctx)
+	if err != nil {
+		return EpisodeStopResult{}, err
+	}
+	defer cancel()
+	response, err := c.client.RecordEpisodeResult(callContext, &learnerv1.RecordEpisodeResultRequest{
+		EpisodeId: episode.ID, Success: episode.Success, EpisodeReward: float32(episode.Reward),
+	})
+	if err != nil {
+		return EpisodeStopResult{}, fmt.Errorf("record episode result: %w", err)
+	}
+	return EpisodeStopResult{
+		StopTraining: response.GetStopTraining(), CompletedEpisodes: response.GetCompletedEpisodes(),
+		RollingSuccessRate:   float64(response.GetRollingSuccessRate()),
+		ConsecutiveSuccesses: response.GetConsecutiveSuccesses(), Reason: response.GetReason(),
+	}, nil
 }
 
 func NewLearnerClient(ctx context.Context) (*LearnerClient, error) {
