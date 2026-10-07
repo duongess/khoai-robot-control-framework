@@ -73,7 +73,7 @@ def test_default_gantry_task_flow_lifts_carries_and_releases(tmp_path) -> None:
     assert action[0, 1] > 0 and action[0, 2] > 0
     assert action[1, 0] > 0 and action[1, 1] < 0 and action[1, 2] > 0
     assert action[2, 0] > 0 and action[2, 1] <= -0.5 and action[2, 2] > 0
-    assert action[3, 1] < 0 and action[3, 2] < 0
+    assert action[3, 1] < 0 and action[3, 2] <= -0.85
 
 
 def test_phase_routing_keeps_action_on_engine_gradient_path(tmp_path) -> None:

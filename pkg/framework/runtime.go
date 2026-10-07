@@ -41,7 +41,7 @@ type runtimeWorker struct {
 	actionSource         string
 }
 
-const rollingSuccessWindowEpisodes = 100
+const rollingSuccessWindowEpisodes = 1000
 
 type runtimeMetrics struct {
 	totalSteps             uint64
@@ -164,6 +164,7 @@ func (r *Runtime) Configure(config RuntimeConfig, learner Learner) error {
 		return errors.New("runtime cannot be configured while active")
 	}
 	r.config, r.learner, r.replay = config, learner, replay
+	r.trainingStopped = false
 	r.metrics.actionCount = 0
 	r.metrics.rawActionSum = nil
 	r.metrics.rawActionSquare = nil
@@ -256,7 +257,26 @@ func (r *Runtime) run(ctx context.Context, done chan struct{}, descriptor TaskDe
 }
 
 func (r *Runtime) cycle(ctx context.Context, descriptor TaskDescriptor) {
-	r.mu.RLock()
+	r.mu.Lock()
+	if r.status != RuntimeRunning {
+		r.mu.Unlock()
+		return
+	}
+	// A task may become terminal outside Step, or a prior cycle may have been
+	// interrupted after observing a terminal state. Reset before prediction so
+	// no action is ever applied to a terminal environment.
+	for _, worker := range r.workers {
+		terminal, hasTerminal := worker.task.(TerminalTask)
+		if worker.outcome != OutcomeRunning || (hasTerminal && terminal.IsTerminal()) {
+			if err := r.resetWorker(worker); err != nil {
+				r.lastError = fmt.Sprintf("worker %d terminal reset: %v", worker.id, err)
+				r.status = RuntimeError
+				r.mu.Unlock()
+				return
+			}
+		}
+	}
+	generation := r.resetGeneration
 	useRandomWarmup := r.metrics.totalSteps < uint64(r.config.RandomActionWarmupTransitions)
 	warmupSeed := r.config.ReplaySampleSeed + int64(r.metrics.totalSteps)*7919
 	groups := make(map[uint64][]int)
@@ -264,7 +284,7 @@ func (r *Runtime) cycle(ctx context.Context, descriptor TaskDescriptor) {
 		groups[worker.episodePolicyVersion] = append(groups[worker.episodePolicyVersion], i)
 	}
 	learner := r.learner
-	r.mu.RUnlock()
+	r.mu.Unlock()
 
 	type indexedPrediction struct {
 		action   Action
@@ -325,7 +345,7 @@ func (r *Runtime) cycle(ctx context.Context, descriptor TaskDescriptor) {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.status != RuntimeRunning {
+	if r.status != RuntimeRunning || generation != r.resetGeneration {
 		return
 	}
 	for index, worker := range r.workers {
@@ -387,7 +407,9 @@ func (r *Runtime) cycle(ctx context.Context, descriptor TaskDescriptor) {
 			}
 			appliedAction = result.AppliedAction
 		}
-		transition := Transition{Observation: worker.state, Action: append(Action(nil), appliedAction...), Reward: result.Reward, NextObservation: result.State, Outcome: result.Outcome, Done: result.Done}
+		terminal, hasTerminal := worker.task.(TerminalTask)
+		done := result.Done || (hasTerminal && terminal.IsTerminal())
+		transition := Transition{Observation: worker.state, Action: append(Action(nil), appliedAction...), Reward: result.Reward, NextObservation: result.State, Outcome: result.Outcome, Done: done}
 		r.replay.Add(transition)
 		worker.actionSource = "policy"
 		if useRandomWarmup {
@@ -408,7 +430,7 @@ func (r *Runtime) cycle(ctx context.Context, descriptor TaskDescriptor) {
 		worker.episodeReward += float64(result.Reward)
 		r.metrics.totalSteps++
 		r.metrics.totalReward += float64(result.Reward)
-		if result.Done {
+		if done {
 			r.metrics.totalEpisodes++
 			r.recordEpisodeOutcome(result.Outcome == OutcomeSuccess)
 			if result.Outcome == OutcomeSuccess {
@@ -416,36 +438,33 @@ func (r *Runtime) cycle(ctx context.Context, descriptor TaskDescriptor) {
 			} else if reason, ok := result.Info["failure_reason_code"]; ok && reason > 0 {
 				r.metrics.failureReasons[fmt.Sprintf("reason_%d", int(reason))]++
 			}
-			if reporter, ok := r.learner.(EpisodeResultLearner); ok {
-				stop, reportErr := reporter.RecordEpisodeResult(ctx, EpisodeResult{
-					ID:      fmt.Sprintf("%d-%d-%d", r.runID, worker.id, worker.episodeID),
-					Success: result.Outcome == OutcomeSuccess,
-					Reward:  worker.episodeReward,
-				})
+			episode := EpisodeResult{
+				ID:      fmt.Sprintf("%d-%d-%d", r.runID, worker.id, worker.episodeID),
+				Success: result.Outcome == OutcomeSuccess,
+				Reward:  worker.episodeReward,
+			}
+			if resetErr := r.resetWorker(worker); resetErr != nil {
+				r.lastError = fmt.Sprintf("worker %d reset: %v", worker.id, resetErr)
+				r.status = RuntimeError
+				return
+			}
+			if reporter, ok := r.learner.(EpisodeResultLearner); ok && !r.trainingStopped {
+				stop, reportErr := reporter.RecordEpisodeResult(ctx, episode)
 				if reportErr != nil {
 					r.lastError = fmt.Sprintf("record episode result: %v", reportErr)
 					r.status = RuntimeError
 					return
 				}
 				if stop.StopTraining {
-					worker.state = append(State(nil), result.State...)
-					r.status = RuntimePaused
-					return
+					r.trainingStopped = true
 				}
 			}
-			state, resetErr := worker.task.Reset()
-			if resetErr != nil {
-				r.lastError = fmt.Sprintf("worker %d reset: %v", worker.id, resetErr)
-				r.status = RuntimeError
-				return
-			}
-			worker.state, worker.episodeID, worker.episodeStep, worker.episodeReward, worker.episodePolicyVersion, worker.lastInfo, worker.outcome, worker.actionSource = append(State(nil), state...), worker.episodeID+1, 0, 0, 0, nil, OutcomeRunning, "pending"
 		} else {
 			worker.state = append(State(nil), result.State...)
 		}
 	}
 	r.updateRates(time.Now())
-	shouldTrain := !r.trainingInFlight && r.replay.Len() >= r.config.WarmupTransitions && r.metrics.totalSteps%uint64(r.config.TrainingInterval) == 0
+	shouldTrain := !r.trainingStopped && !r.trainingInFlight && r.replay.Len() >= r.config.WarmupTransitions && r.metrics.totalSteps%uint64(r.config.TrainingInterval) == 0
 	if shouldTrain {
 		sample, sampleErr := r.replay.Sample(r.config.TrainingBatchSize)
 		if sampleErr == nil {
@@ -562,6 +581,9 @@ func (r *Runtime) train(ctx context.Context, transitions []Transition) {
 		r.lastError = fmt.Sprintf("train batch: %v", err)
 		return
 	}
+	if !result.Accepted {
+		return
+	}
 	r.metrics.trainingBatches++
 	r.metrics.policyVersion, r.metrics.trainingStep = result.PolicyVersion, result.TrainingStep
 	r.metrics.actorLoss, r.metrics.criticLoss, r.metrics.alphaLoss, r.metrics.entropy = result.ActorLoss, result.CriticLoss, result.AlphaLoss, result.Entropy
@@ -591,16 +613,48 @@ func (r *Runtime) Resume() error {
 func (r *Runtime) Reset() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.status == RuntimeRunning {
-		return errors.New("runtime must be paused before reset")
-	}
+	r.resetGeneration++
+	var resetErrors []error
 	for _, worker := range r.workers {
-		state, err := worker.task.Reset()
-		if err != nil {
-			return err
+		if err := r.resetWorker(worker); err != nil {
+			resetErrors = append(resetErrors, fmt.Errorf("worker %d reset: %w", worker.id, err))
 		}
-		worker.state, worker.episodeID, worker.episodeStep, worker.episodeReward, worker.lastInfo, worker.outcome, worker.actionSource = append(State(nil), state...), worker.episodeID+1, 0, 0, nil, OutcomeRunning, "pending"
 	}
+	if err := errors.Join(resetErrors...); err != nil {
+		r.status, r.lastError = RuntimeError, err.Error()
+		return err
+	}
+	r.lastError = ""
+	if r.status == RuntimeError {
+		if r.done == nil {
+			r.status = RuntimeStopped
+		} else {
+			select {
+			case <-r.done:
+				r.status = RuntimeStopped
+			default:
+				r.status = RuntimeRunning
+			}
+		}
+	}
+	return nil
+}
+
+func (r *Runtime) resetWorker(worker *runtimeWorker) error {
+	state, err := worker.task.Reset()
+	if err != nil {
+		return err
+	}
+	worker.state = append(State(nil), state...)
+	worker.episodeID++
+	worker.episodeStep = 0
+	worker.episodeReward = 0
+	worker.episodePolicyVersion = 0
+	worker.lastAction = nil
+	worker.lastReward = 0
+	worker.lastInfo = nil
+	worker.outcome = OutcomeRunning
+	worker.actionSource = "pending"
 	return nil
 }
 

@@ -236,9 +236,13 @@ def _sample_parametric(policy: FlyConnectomePolicy, observation: torch.Tensor, d
     if _uses_default_gantry_task_flow(policy):
         release = torch.round((observation[:, 19] + 1.0) * 4.5).to(torch.int64) >= 7
         parameters = dict(parameters)
-        parameters["channel_2.b"] = torch.where(
+        release_bias = torch.where(
             release, -0.5 - 0.5 * torch.sigmoid(parameters["channel_2.b"]), parameters["channel_2.b"]
         )
+        # The reflex engine reads the indexed key, while task flow uses the
+        # named key. Both must describe the same law.
+        parameters["2.b"] = release_bias
+        parameters["channel_2.b"] = release_bias
     signal_overrides = _apply_gantry_task_flow(observation, parameters) if _uses_default_gantry_task_flow(policy) else None
     action = _evaluate_reflex(policy, observation, parameters, signal_overrides)
     if deterministic:

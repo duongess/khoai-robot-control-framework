@@ -19,6 +19,7 @@ type learnerServiceStub struct {
 	predictRequest *learnerv1.PredictBatchRequest
 	trainRequest   *learnerv1.TrainBatchRequest
 	saveRequest    *learnerv1.SaveCheckpointRequest
+	episodeRequest *learnerv1.RecordEpisodeResultRequest
 }
 
 func (s *learnerServiceStub) HealthCheck(context.Context, *learnerv1.HealthCheckRequest) (*learnerv1.HealthCheckResponse, error) {
@@ -42,6 +43,11 @@ func (s *learnerServiceStub) TrainBatch(_ context.Context, request *learnerv1.Tr
 func (s *learnerServiceStub) SaveCheckpoint(_ context.Context, request *learnerv1.SaveCheckpointRequest) (*learnerv1.SaveCheckpointResponse, error) {
 	s.saveRequest = request
 	return &learnerv1.SaveCheckpointResponse{ModelName: "grasp-v1", PolicyVersion: 11, TrainingStep: 23}, nil
+}
+
+func (s *learnerServiceStub) RecordEpisodeResult(_ context.Context, request *learnerv1.RecordEpisodeResultRequest) (*learnerv1.RecordEpisodeResultResponse, error) {
+	s.episodeRequest = request
+	return &learnerv1.RecordEpisodeResultResponse{StopTraining: true, CompletedEpisodes: 20, RollingSuccessRate: 1, ConsecutiveSuccesses: 20, Reason: "consecutive_successes"}, nil
 }
 
 func TestLearnerClientHealthCheck(t *testing.T) {
@@ -108,6 +114,20 @@ func TestLearnerClientSavesNamedCheckpoint(t *testing.T) {
 	}
 	if result.ModelName != "grasp-v1" || result.PolicyVersion != 11 || result.TrainingStep != 23 {
 		t.Fatalf("SaveCheckpoint() result = %#v", result)
+	}
+}
+
+func TestLearnerClientReportsCompletedEpisode(t *testing.T) {
+	client, service := newTestLearnerClient(t)
+	result, err := client.RecordEpisodeResult(context.Background(), EpisodeResult{ID: "run-worker-episode", Success: true, Reward: 12.5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if service.episodeRequest.GetEpisodeId() != "run-worker-episode" || !service.episodeRequest.GetSuccess() || service.episodeRequest.GetEpisodeReward() != 12.5 {
+		t.Fatalf("episode request = %#v", service.episodeRequest)
+	}
+	if !result.StopTraining || result.CompletedEpisodes != 20 || result.ConsecutiveSuccesses != 20 || result.Reason != "consecutive_successes" {
+		t.Fatalf("episode result = %#v", result)
 	}
 }
 

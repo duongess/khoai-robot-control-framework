@@ -289,8 +289,10 @@ class LearnerServicer(learner_pb2_grpc.LearnerServiceServicer):
             with self._training_lock:
                 if self._early_stopped:
                     metrics = dict(self._last_metrics)
+                    updated = False
                 else:
                     metrics = self._agent.update(batch)
+                    updated = True
                     snapshot = deepcopy(self._agent.actor).eval()
                     with self._policy_lock:
                         self._policy_version += 1
@@ -308,7 +310,7 @@ class LearnerServicer(learner_pb2_grpc.LearnerServiceServicer):
         if self._train_requests % self._config.log_every_n_requests == 0:
             LOGGER.info("train_batch", extra={"fields": {"received": len(request.batch.transitions), "samples_seen": self._samples_seen, **metrics}})
         return learner_pb2.TrainBatchResponse(
-            accepted=True,
+            accepted=updated,
             samples_seen=self._samples_seen,
             policy_version=self._policy_version,
             actor_loss=metrics["actor_loss"],
@@ -462,6 +464,18 @@ class LearnerServicer(learner_pb2_grpc.LearnerServiceServicer):
             payload["evaluation"] = self._evaluation_state()
             atomic_save_checkpoint(path, payload)
 
+    def _activate_best_checkpoint_locked(self) -> None:
+        """Serve the saved peak actor for evaluation while leaving SAC frozen."""
+        path = checkpoint_path(self._config.checkpoint_dir, "best_production_checkpoint")
+        payload = load_checkpoint(path)
+        self._agent.actor.load_state_dict(payload["agent"]["actor"])
+        snapshot = deepcopy(self._agent.actor).eval()
+        with self._policy_lock:
+            self._policy_version += 1
+            self._actor_snapshots[self._policy_version] = snapshot
+            while len(self._actor_snapshots) > self._config.max_policy_snapshots:
+                del self._actor_snapshots[min(self._actor_snapshots)]
+
     def _record_episode_result_locked(self, success: bool, average_reward: float) -> None:
         if self._early_stopped:
             return
@@ -495,6 +509,7 @@ class LearnerServicer(learner_pb2_grpc.LearnerServiceServicer):
             else:
                 self._mark_best_checkpoint_stopped_locked()
         if self._early_stopped:
+            self._activate_best_checkpoint_locked()
             print(EARLY_STOP_MESSAGE, flush=True)
 
     def record_episode_result(self, success: bool, average_reward: float) -> None:
@@ -507,6 +522,14 @@ class LearnerServicer(learner_pb2_grpc.LearnerServiceServicer):
             context.abort(grpc.StatusCode.INVALID_ARGUMENT, "episode result requires an ID and finite reward")
         try:
             with self._training_lock:
+                if self._eval_mode:
+                    return learner_pb2.RecordEpisodeResultResponse(
+                        stop_training=True,
+                        completed_episodes=self._completed_episodes,
+                        rolling_success_rate=self._rolling_success_rate(window=SUCCESS_WINDOW_EPISODES),
+                        consecutive_successes=self._consecutive_successes,
+                        reason="evaluation_mode",
+                    )
                 if request.episode_id not in self._reported_episode_ids:
                     self._record_episode_result_locked(bool(request.success), float(request.episode_reward))
                     self._reported_episode_ids.add(request.episode_id)

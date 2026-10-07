@@ -30,6 +30,8 @@ type Runtime struct {
 	// unbounded queue of expensive learner updates. Prediction remains on the
 	// control path; a later cycle schedules the next update after this one ends.
 	trainingInFlight bool
+	trainingStopped  bool
+	resetGeneration  uint64
 	lastError        string
 }
 

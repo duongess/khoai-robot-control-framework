@@ -204,6 +204,13 @@ def test_eval_mode_skips_training_and_loads_best_checkpoint(tmp_path: Path):
     assert result.training_step == previous_step
     assert servicer._agent.actor.training is False
 
+    episode = servicer.RecordEpisodeResult(
+        learner_pb2.RecordEpisodeResultRequest(episode_id="eval-1", success=True, episode_reward=1.0), AbortContext()
+    )
+    assert episode.stop_training
+    assert episode.completed_episodes == 0
+    assert not (tmp_path / "best_production_checkpoint.pt").exists()
+
 
 def test_connectome_stops_after_20_consecutive_successes_and_locks_weights(tmp_path: Path, capsys):
     graph = _graph(tmp_path)
@@ -269,6 +276,22 @@ def test_hard_limit_stops_at_150_and_saves_fallback_checkpoint(tmp_path: Path):
     assert servicer._stop_reason == "max_episodes"
     assert servicer._early_stopped
     assert (tmp_path / "best_production_checkpoint.pt").is_file()
+
+
+def test_stop_restores_earlier_peak_actor_for_continuing_evaluation(tmp_path: Path):
+    servicer = LearnerServicer(LearnerConfig(state_dim=3, action_dim=3, checkpoint_dir=str(tmp_path)))
+    for index in range(50):
+        servicer.record_episode_result(index % 10 != 0, 1.0)
+    peak = torch.load(tmp_path / "best_production_checkpoint.pt", map_location="cpu", weights_only=True)["agent"]["actor"]
+    with torch.no_grad():
+        next(servicer._agent.actor.parameters()).add_(1.0)
+    for _ in range(100):
+        servicer.record_episode_result(False, 0.0)
+    assert servicer._stop_reason == "max_episodes"
+    assert servicer._policy_version == 2
+    restored_actor = servicer._agent.actor.state_dict()
+    assert all(torch.equal(restored_actor[name], value) for name, value in peak.items() if isinstance(value, torch.Tensor))
+    assert torch.load(tmp_path / "best_production_checkpoint.pt", map_location="cpu", weights_only=True)["evaluation"]["early_stopped"]
 
 
 def test_episode_result_rpc_is_idempotent_and_uses_completed_episodes(tmp_path: Path):

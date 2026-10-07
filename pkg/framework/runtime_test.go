@@ -2,6 +2,7 @@ package framework
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -9,6 +10,138 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
+
+func TestTerminalWorkersResetBeforeNextStepAndTrainingStopKeepsSimulationRunning(t *testing.T) {
+	learner := &stoppingRuntimeLearner{}
+	factory := &terminalRuntimeFactory{}
+	runtime := NewRuntime()
+	descriptor := TaskDescriptor{Name: "terminal", StateDimension: 2, ActionDimension: 1, ActionMin: -1, ActionMax: 1}
+	if err := runtime.RegisterTask(TaskRegistration{Descriptor: descriptor, Factory: factory}); err != nil {
+		t.Fatal(err)
+	}
+	config := DefaultRuntimeConfig()
+	config.WorkerCount, config.TickInterval, config.RandomActionWarmupTransitions, config.WarmupTransitions, config.TrainingBatchSize, config.TrainingInterval = 2, time.Millisecond, 0, 1, 1, 1
+	if err := runtime.Configure(config, learner); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := runtime.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for runtime.Snapshot().TotalEpisodes < 6 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	snapshot := runtime.Snapshot()
+	runtime.Stop()
+	if snapshot.Status != RuntimeRunning || snapshot.TotalEpisodes < 6 || learner.reports != 2 || !runtime.trainingStopped || learner.trainings != 0 {
+		t.Fatalf("simulation/training state after stop: snapshot=%#v reports=%d trainingStopped=%v trainings=%d", snapshot, learner.reports, runtime.trainingStopped, learner.trainings)
+	}
+	for index, task := range factory.tasks {
+		if task.resets <= 2 || task.steps < 2 || task.terminal {
+			t.Fatalf("worker %d was not reset after terminal steps: %#v", index+1, task)
+		}
+	}
+}
+
+func TestResetRecoversErroredRuntimeAndResetsEveryWorker(t *testing.T) {
+	factory := &terminalRuntimeFactory{}
+	runtime := NewRuntime()
+	if err := runtime.RegisterTask(TaskRegistration{Descriptor: TaskDescriptor{Name: "terminal", StateDimension: 2, ActionDimension: 1, ActionMin: -1, ActionMax: 1}, Factory: factory}); err != nil {
+		t.Fatal(err)
+	}
+	config := DefaultRuntimeConfig()
+	config.WorkerCount, config.TickInterval = 2, time.Hour
+	if err := runtime.Configure(config, &runtimeTestLearner{}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := runtime.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Stop()
+	runtime.mu.Lock()
+	runtime.status, runtime.lastError = RuntimeError, "worker 2 stepped terminal task"
+	factory.tasks[1].terminal = true
+	runtime.mu.Unlock()
+	if err := runtime.Reset(); err != nil {
+		t.Fatal(err)
+	}
+	if snapshot := runtime.Snapshot(); snapshot.Status != RuntimeRunning || snapshot.LastError != "" {
+		t.Fatalf("reset did not recover runtime: %#v", snapshot)
+	}
+	if err := runtime.Reset(); err != nil {
+		t.Fatalf("reset while running failed: %v", err)
+	}
+	for index, task := range factory.tasks {
+		if task.terminal || task.resets != 3 {
+			t.Fatalf("worker %d did not reset twice after start: %#v", index+1, task)
+		}
+	}
+}
+
+func TestCycleResetsAlreadyTerminalTaskBeforeStepping(t *testing.T) {
+	factory := &terminalRuntimeFactory{}
+	runtime := NewRuntime()
+	descriptor := TaskDescriptor{Name: "terminal", StateDimension: 2, ActionDimension: 1, ActionMin: -1, ActionMax: 1}
+	if err := runtime.RegisterTask(TaskRegistration{Descriptor: descriptor, Factory: factory}); err != nil {
+		t.Fatal(err)
+	}
+	config := DefaultRuntimeConfig()
+	config.WorkerCount, config.TickInterval, config.RandomActionWarmupTransitions, config.WarmupTransitions = 2, time.Hour, 0, 100000
+	if err := runtime.Configure(config, &runtimeTestLearner{}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := runtime.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Stop()
+	runtime.mu.Lock()
+	factory.tasks[1].terminal = true
+	runtime.mu.Unlock()
+	runtime.cycle(ctx, descriptor)
+	if snapshot := runtime.Snapshot(); snapshot.Status != RuntimeRunning || snapshot.TotalEpisodes != 2 {
+		t.Fatalf("terminal task was stepped before reset: %#v", snapshot)
+	}
+	if factory.tasks[1].resets != 3 || factory.tasks[1].steps != 1 {
+		t.Fatalf("terminal task reset/step order is wrong: %#v", factory.tasks[1])
+	}
+}
+
+func TestResetDiscardsPredictionForOldEpisode(t *testing.T) {
+	learner := &blockingPredictionLearner{started: make(chan struct{}), release: make(chan struct{})}
+	runtime := NewRuntime()
+	descriptor := TaskDescriptor{Name: "test", StateDimension: 2, ActionDimension: 1, ActionMin: -1, ActionMax: 1}
+	if err := runtime.RegisterTask(TaskRegistration{Descriptor: descriptor, Factory: runtimeTestFactory{}}); err != nil {
+		t.Fatal(err)
+	}
+	config := DefaultRuntimeConfig()
+	config.WorkerCount, config.TickInterval, config.RandomActionWarmupTransitions = 1, time.Hour, 0
+	if err := runtime.Configure(config, learner); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := runtime.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Stop()
+	done := make(chan struct{})
+	go func() { runtime.cycle(ctx, descriptor); close(done) }()
+	<-learner.started
+	if err := runtime.Reset(); err != nil {
+		t.Fatal(err)
+	}
+	close(learner.release)
+	<-done
+	if snapshot := runtime.Snapshot(); snapshot.TotalSteps != 0 || snapshot.Workers[0].EpisodeStep != 0 {
+		t.Fatalf("old prediction stepped reset episode: %#v", snapshot)
+	}
+}
 
 type runtimeTestTask struct{ state State }
 
@@ -24,6 +157,60 @@ func (t *runtimeTestTask) Step(action Action) (StepResult, error) {
 type runtimeTestFactory struct{}
 
 func (runtimeTestFactory) Create() (Task, error) { return &runtimeTestTask{}, nil }
+
+type terminalRuntimeTask struct {
+	terminal   bool
+	returnDone bool
+	resets     int
+	steps      int
+}
+
+func (task *terminalRuntimeTask) Reset() (State, error) {
+	task.terminal = false
+	task.resets++
+	return State{0, 0}, nil
+}
+
+func (task *terminalRuntimeTask) Step(Action) (StepResult, error) {
+	if task.terminal {
+		return StepResult{}, errors.New("stepped terminal task")
+	}
+	task.steps++
+	task.terminal = true
+	return StepResult{State: State{0, 0}, Reward: 1, Outcome: OutcomeSuccess, Done: task.returnDone}, nil
+}
+
+func (task *terminalRuntimeTask) IsTerminal() bool { return task.terminal }
+
+type terminalRuntimeFactory struct{ tasks []*terminalRuntimeTask }
+
+func (factory *terminalRuntimeFactory) Create() (Task, error) {
+	task := &terminalRuntimeTask{returnDone: len(factory.tasks)%2 == 0}
+	factory.tasks = append(factory.tasks, task)
+	return task, nil
+}
+
+type stoppingRuntimeLearner struct {
+	runtimeTestLearner
+	reports int
+}
+
+func (learner *stoppingRuntimeLearner) RecordEpisodeResult(_ context.Context, _ EpisodeResult) (EpisodeStopResult, error) {
+	learner.reports++
+	return EpisodeStopResult{StopTraining: learner.reports >= 2, CompletedEpisodes: uint64(learner.reports)}, nil
+}
+
+type blockingPredictionLearner struct {
+	runtimeTestLearner
+	started chan struct{}
+	release chan struct{}
+}
+
+func (learner *blockingPredictionLearner) PredictBatch(ctx context.Context, states []State, version uint64) (PredictionResult, error) {
+	close(learner.started)
+	<-learner.release
+	return learner.runtimeTestLearner.PredictBatch(ctx, states, version)
+}
 
 type runtimeTestLearner struct {
 	mu                     sync.Mutex
@@ -360,18 +547,18 @@ func TestRuntimeSchedulesAtMostOneTrainingBatchAtATime(t *testing.T) {
 	runtime.Stop()
 }
 
-func TestRuntimeRollingSuccessRateUsesLast100Episodes(t *testing.T) {
+func TestRuntimeRollingSuccessRateUsesLast1000Episodes(t *testing.T) {
 	runtime := NewRuntime()
-	for i := 0; i < 100; i++ {
-		runtime.recordEpisodeOutcome(i < 70)
+	for i := 0; i < 1000; i++ {
+		runtime.recordEpisodeOutcome(i < 700)
 	}
 	if got, want := runtime.rollingSuccessRate(), 0.7; got != want {
 		t.Fatalf("rolling success rate = %.3f, want %.3f", got, want)
 	}
-	for i := 0; i < 10; i++ {
+	for i := 0; i < 100; i++ {
 		runtime.recordEpisodeOutcome(false)
 	}
 	if got, want := runtime.rollingSuccessRate(), 0.6; got != want {
-		t.Fatalf("rolling success rate after 110 episodes = %.3f, want %.3f", got, want)
+		t.Fatalf("rolling success rate after 1100 episodes = %.3f, want %.3f", got, want)
 	}
 }
