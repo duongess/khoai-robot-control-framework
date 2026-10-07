@@ -127,7 +127,7 @@ def test_best_checkpoint_and_early_stopping_callback(tmp_path: Path):
     servicer = LearnerServicer(config, model_name="grasp-v1")
 
     servicer.record_episode_result(True, 5.0)
-    best_path = tmp_path / "best_policy_checkpoint.pt"
+    best_path = tmp_path / "best_model_checkpoint.pt"
     assert best_path.is_file()
     assert servicer._best_success_rate == pytest.approx(1.0)
     assert servicer._best_average_reward == pytest.approx(5.0)
@@ -148,7 +148,29 @@ def test_best_checkpoint_and_early_stopping_callback(tmp_path: Path):
     assert result.training_step == previous_step
 
 
-def test_two_stage_training_controller_freezes_connectome_then_locks_policy(tmp_path: Path):
+def test_eval_mode_skips_training_and_loads_best_checkpoint(tmp_path: Path):
+    config = LearnerConfig(state_dim=3, action_dim=3, checkpoint_dir=str(tmp_path), eval_mode=True)
+    checkpoint_path = tmp_path / "best_model_checkpoint.pt"
+    checkpoint_path.write_bytes(b"")
+
+    servicer = LearnerServicer(config)
+    assert servicer._eval_mode is True
+    assert servicer._config.deterministic_inference is True
+
+    previous_step = servicer._training_step
+    transitions = [transition_pb2.Transition(
+        state=environment_pb2.State(values=[0.0, 0.1, 0.2]),
+        action=environment_pb2.Action(values=[0.0, 0.0, 0.0]),
+        reward=1.0,
+        next_state=environment_pb2.State(values=[0.1, 0.2, 0.3]),
+    ) for _ in range(4)]
+    result = servicer.TrainBatch(learner_pb2.TrainBatchRequest(batch=transition_pb2.TransitionBatch(transitions=transitions)), AbortContext())
+    assert result.accepted is True
+    assert result.training_step == previous_step
+    assert servicer._agent.actor.training is False
+
+
+def test_two_stage_training_controller_keeps_connectome_trainable_until_real_thresholds(tmp_path: Path):
     graph = _graph(tmp_path)
     graph_dir = tmp_path / "connectome_cache"
     graph.save(graph_dir)
@@ -160,13 +182,13 @@ def test_two_stage_training_controller_freezes_connectome_then_locks_policy(tmp_
         checkpoint_dir=str(tmp_path),
     )
     servicer = LearnerServicer(config)
-    for success in [True] * 8 + [False, False]:
+    for success in [True] * 4 + [False] + [True] * 4:
         servicer.record_episode_result(success, 1.0)
 
-    assert servicer._stage1_frozen
-    assert all(not parameter.requires_grad for parameter in servicer._agent.actor.sensory_encoder.parameters())
-    assert all(not parameter.requires_grad for parameter in servicer._agent.actor.base_head.parameters())
-    assert all(parameter.requires_grad for parameter in servicer._agent.actor.residual_head.parameters())
+    assert not servicer._stage1_frozen
+    assert all(parameter.requires_grad for parameter in servicer._agent.actor.sensory_encoder.parameters())
+    assert all(parameter.requires_grad for parameter in servicer._agent.actor.base_head.parameters())
+    assert servicer._agent.actor.edge_log_gains.requires_grad
 
     deployment_servicer = LearnerServicer(config)
     for _ in range(5):

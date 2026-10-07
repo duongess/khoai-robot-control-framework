@@ -147,6 +147,7 @@ class LearnerConfig:
     # At the fixed 0.1 s control period, 0.999 keeps meaningful credit for a
     # 30 s secure hold and its possible later safety failure.
     gamma: float = 0.999
+    eval_mode: bool = False
     deterministic_inference: bool = False
     # Keep the local learner responsive on development machines. These values
     # control PyTorch compute threads, not the number of simulated workers.
@@ -240,6 +241,7 @@ class LearnerConfig:
                 vertical_acceleration_observation_index=int(os.environ.get("LEARNER_VERTICAL_ACCELERATION_OBSERVATION_INDEX", "18")),
                 previous_vertical_action_observation_index=int(os.environ.get("LEARNER_PREVIOUS_VERTICAL_ACTION_OBSERVATION_INDEX", "26")),
                 gamma=float(os.environ.get("LEARNER_GAMMA", "0.999")),
+                eval_mode=os.environ.get("LEARNER_EVAL_MODE", "false").lower() == "true",
                 deterministic_inference=os.environ.get("LEARNER_DETERMINISTIC_INFERENCE", "false").lower() == "true",
                 torch_num_threads=int(os.environ.get("LEARNER_TORCH_NUM_THREADS", "1")),
                 torch_num_interop_threads=int(os.environ.get("LEARNER_TORCH_NUM_INTEROP_THREADS", "1")),

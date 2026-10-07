@@ -254,14 +254,16 @@ class FlyConnectomePolicy(nn.Module):
 
         x_track = -torch.clamp(gain_x * err_x, min=-1.0, max=1.0)
 
-        # Only descend once the carriage is already horizontally close enough to
-        # the object. If the lateral error is still large, keep the gripper level and
-        # drive horizontally first. The attractive target term keeps the nominal
-        # controller moving down toward the workpiece even before the residual loop
-        # has learned a useful correction.
-        descent_gate = torch.abs(err_x) < torch.tensor(0.15, dtype=observation.dtype, device=observation.device)
+        # Only descend once the carriage is already nearly centered over the
+        # object. A small trim error can still be corrected while approaching, but
+        # the nominal descent must not start while the gripper is laterally offset
+        # and the controller is still trying to center the carriage.
+        descent_gate = torch.abs(err_x) < torch.tensor(0.03, dtype=observation.dtype, device=observation.device)
+        fine_trim_gate = torch.abs(err_x) <= torch.tensor(0.10, dtype=observation.dtype, device=observation.device)
         nominal_y_track = -torch.clamp(1.5 * nominal_error_y, min=-1.0, max=1.0)
+        lateral_trim = torch.where(fine_trim_gate, -torch.clamp(2.0 * err_x, min=-1.0, max=1.0), torch.zeros_like(err_x))
         y_track = torch.where(descent_gate & ~attached, nominal_y_track, torch.zeros_like(err_x))
+        y_track = torch.where(~descent_gate & ~attached & fine_trim_gate, lateral_trim, y_track)
 
         # Post-grasp reflex cascade: lift first while attached but still below the
         # safe carry height, then transport horizontally to the target while holding

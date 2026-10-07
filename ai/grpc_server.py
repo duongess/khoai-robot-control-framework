@@ -77,11 +77,28 @@ LOGGER = configure_logging()
 class LearnerServicer(learner_pb2_grpc.LearnerServiceServicer):
     """A local SAC learner that trains only on supplied transition batches."""
 
-    def __init__(self, config: LearnerConfig | None = None, model_name: str | None = None) -> None:
+    @staticmethod
+    def _best_checkpoint_names() -> tuple[str, ...]:
+        return ("best_model_checkpoint", "best_policy_checkpoint", "best_production_checkpoint")
+
+    def __init__(self, config: LearnerConfig | None = None, model_name: str | None = None, eval_mode: bool = False) -> None:
         requested_config = config or LearnerConfig.from_environment()
+        self._eval_mode = bool(eval_mode) or bool(getattr(requested_config, "eval_mode", False))
         self._model_name = validate_model_name(model_name) if model_name else ""
         checkpoint = checkpoint_path(requested_config.checkpoint_dir, self._model_name) if self._model_name else None
         payload = load_checkpoint(checkpoint) if checkpoint and checkpoint.is_file() else None
+        if payload is None and self._eval_mode and not self._model_name:
+            for name in self._best_checkpoint_names():
+                candidate = checkpoint_path(requested_config.checkpoint_dir, name)
+                if not candidate.is_file():
+                    continue
+                try:
+                    payload = load_checkpoint(candidate)
+                except ValueError:
+                    continue
+                self._model_name = name
+                checkpoint = candidate
+                break
         if payload is None:
             self._config = requested_config
         else:
@@ -126,6 +143,12 @@ class LearnerServicer(learner_pb2_grpc.LearnerServiceServicer):
             vertical_acceleration_observation_index=self._config.vertical_acceleration_observation_index,
             previous_vertical_action_observation_index=self._config.previous_vertical_action_observation_index,
         ))
+        if self._eval_mode:
+            self._config = replace(self._config, deterministic_inference=True)
+            self._agent.actor.eval()
+            self._agent.critic_one.eval()
+            self._agent.critic_two.eval()
+            self._agent.log_alpha.requires_grad_(False)
         # A new graph learner must never silently serve the legacy residual actor.
         # Checkpoints restore their own persisted schema in _restore_checkpoint.
         if payload is None and self._config.controller_type in {"fly_connectome", "random_graph"}:
@@ -151,6 +174,8 @@ class LearnerServicer(learner_pb2_grpc.LearnerServiceServicer):
         self._stage1_frozen = False
         self._early_stopped = False
         self._last_metrics = self._empty_metrics()
+        if self._config.controller_type in {"fly_connectome", "random_graph"}:
+            self._re_enable_connectome_gradients()
         if payload is not None:
             self._restore_checkpoint(payload, checkpoint)
             # Legacy checkpoints predate the registry. Upgrade them at boot
@@ -168,6 +193,7 @@ class LearnerServicer(learner_pb2_grpc.LearnerServiceServicer):
     def PredictBatch(self, request, context):
         try:
             states = self._states_to_tensor(request.states, "states")
+            deterministic = self._config.deterministic_inference or self._eval_mode
             # SAC must sample actions while it is collecting replay data. A
             # deterministic, untrained actor repeats one arbitrary vector (for
             # example, simultaneous right/down motion) and never explores a
@@ -188,7 +214,7 @@ class LearnerServicer(learner_pb2_grpc.LearnerServiceServicer):
             with torch.inference_mode():
                 mean, log_std = actor(states)
                 predicted_actions, fly_base_actions, residual_actions = self._agent.act_with_actor_components(
-                    actor, states, deterministic=self._config.deterministic_inference
+                    actor, states, deterministic=deterministic
                 )
                 predicted_actions = predicted_actions.clamp(-1, 1)
         except ValueError as error:
@@ -222,6 +248,28 @@ class LearnerServicer(learner_pb2_grpc.LearnerServiceServicer):
             context.abort(grpc.StatusCode.INVALID_ARGUMENT, "transition batch is required")
         try:
             batch = self._batch_to_tensors(request.batch.transitions)
+            if self._eval_mode:
+                self._agent.actor.eval()
+                self._agent.critic_one.eval()
+                self._agent.critic_two.eval()
+                metrics = dict(self._last_metrics)
+                self._last_metrics = dict(metrics)
+                return learner_pb2.TrainBatchResponse(
+                    accepted=True,
+                    samples_seen=self._samples_seen,
+                    policy_version=self._policy_version,
+                    actor_loss=metrics["actor_loss"],
+                    critic_loss=(metrics["critic_one_loss"] + metrics["critic_two_loss"]) / 2,
+                    alpha_loss=metrics["alpha_loss"],
+                    entropy=metrics["entropy"],
+                    training_step=self._training_step,
+                    critic_one_q=metrics["critic_one_q"],
+                    critic_two_q=metrics["critic_two_q"],
+                    alpha=metrics["alpha"],
+                    actor_log_std_horizontal=metrics["actor_log_std_horizontal"],
+                    actor_log_std_vertical=metrics["actor_log_std_vertical"],
+                    actor_log_std_gripper=metrics["actor_log_std_gripper"],
+                )
             self._record_terminal_transitions(request.batch.transitions)
             # The Go runtime already applies backpressure, and this lock also
             # makes the service safe if another client submits a train request.
@@ -313,22 +361,39 @@ class LearnerServicer(learner_pb2_grpc.LearnerServiceServicer):
                 parameters.extend(module.parameters())
         return parameters
 
+    def _re_enable_connectome_gradients(self) -> None:
+        actor = self._agent.actor
+        connectome_modules = (
+            "sensory_encoder",
+            "neuron_bias",
+            "leak_logit",
+            "edge_log_gains",
+            "motor_gain",
+            "motor_bias",
+            "latent_projection",
+            "base_head",
+            "transport_motor_gain",
+            "transport_motor_bias",
+            "residual_head",
+            "log_std",
+            "parameter_head",
+            "parameter_log_std",
+        )
+        for module_name in connectome_modules:
+            module = getattr(actor, module_name, None)
+            if isinstance(module, torch.nn.Parameter):
+                module.requires_grad_(True)
+            elif module is not None and hasattr(module, "parameters"):
+                for parameter in module.parameters():
+                    parameter.requires_grad_(True)
+
     def _freeze_connectome_locked(self) -> None:
-        if self._stage1_frozen:
-            return
-        parameters = self._connectome_parameters()
-        if not parameters:
-            self._stage1_frozen = True
-            return
-        for parameter in parameters:
-            parameter.requires_grad_(False)
-        if hasattr(self._agent.actor, "residual_head"):
-            for parameter in self._agent.actor.residual_head.parameters():
-                parameter.requires_grad_(True)
-        if hasattr(self._agent.actor, "log_std"):
-            self._agent.actor.log_std.requires_grad_(True)
-        self._stage1_frozen = True
-        LOGGER.warning("[TRAIN STAGE 1] Connectome frozen at >= 80%% success. Stabilizing latent space.", extra={"fields": {"success_rate": self._rolling_success_rate(window=10), "episodes": len(self._episode_results)}})
+        # Early connectome freezing is disabled by policy. The graph must remain
+        # trainable throughout the run so small-sample success spikes do not lock
+        # a partially converged policy before it has truly learned.
+        self._re_enable_connectome_gradients()
+        self._stage1_frozen = False
+        LOGGER.warning("[TRAIN STAGE 1] Connectome freeze hook disabled; all graph parameters remain trainable.", extra={"fields": {"success_rate": self._rolling_success_rate(window=20), "episodes": len(self._episode_results)}})
 
     def _save_production_checkpoint_locked(self, success_rate: float, average_reward: float) -> None:
         path = checkpoint_path(self._config.checkpoint_dir, "best_production_checkpoint")
@@ -379,23 +444,31 @@ class LearnerServicer(learner_pb2_grpc.LearnerServiceServicer):
             self._freeze_learning_locked()
 
     def _save_best_checkpoint_locked(self, success_rate: float, average_reward: float) -> None:
-        path = checkpoint_path(self._config.checkpoint_dir, "best_policy_checkpoint")
         evaluation = self._evaluation_state()
         evaluation["best_success_rate"] = success_rate
         evaluation["best_average_reward"] = average_reward
-        payload = {"format_version": CHECKPOINT_FORMAT_VERSION, "model_name": "best_policy_checkpoint", "learner_config": asdict(self._config), "agent": self._agent.checkpoint_state(), "samples_seen": self._samples_seen, "policy_version": self._policy_version, "training_step": self._training_step, "evaluation": evaluation}
-        atomic_save_checkpoint(path, payload)
+        paths = [checkpoint_path(self._config.checkpoint_dir, name) for name in self._best_checkpoint_names()]
+        saved_paths = []
+        for path in paths:
+            payload = {"format_version": CHECKPOINT_FORMAT_VERSION, "model_name": path.stem, "learner_config": asdict(self._config), "agent": self._agent.checkpoint_state(), "samples_seen": self._samples_seen, "policy_version": self._policy_version, "training_step": self._training_step, "evaluation": evaluation}
+            atomic_save_checkpoint(path, payload)
+            saved_paths.append(str(path))
         self._best_success_rate = success_rate
         self._best_average_reward = average_reward
-        LOGGER.warning("[AUTO-SAVE] New best model saved with Success Rate: %.1f%%!", success_rate * 100.0, extra={"fields": {"path": str(path), "average_reward": average_reward}})
+        LOGGER.warning("[AUTO-SAVE] New best model saved with Success Rate: %.1f%%!", success_rate * 100.0, extra={"fields": {"paths": saved_paths, "average_reward": average_reward}})
 
     def _record_episode_result_locked(self, success: bool, average_reward: float) -> None:
         if not math.isfinite(average_reward):
             raise ValueError("episode reward must be finite")
         self._episode_results.append((bool(success), float(average_reward)))
         rolling_success_rate = self._rolling_success_rate(window=10)
-        if len(self._episode_results) >= 10 and rolling_success_rate >= 0.80 and not self._stage1_frozen:
-            self._freeze_connectome_locked()
+        if len(self._episode_results) >= 30 and self._rolling_success_rate(window=20) >= 0.85 and not self._stage1_frozen:
+            # The runtime freeze hook is intentionally disabled. If a team wants a
+            # late-stage freeze, it must wait until at least episode 30 with a
+            # 20-episode rolling success rate >= 85% and must still keep the graph
+            # trainable until that explicit gate is reached.
+            self._re_enable_connectome_gradients()
+            self._stage1_frozen = False
         average = self._rolling_average_reward()
         if len(self._episode_results) >= 1:
             if rolling_success_rate >= 0.90:
@@ -404,7 +477,7 @@ class LearnerServicer(learner_pb2_grpc.LearnerServiceServicer):
                 self._high_success_streak = 0
         else:
             self._high_success_streak = 0
-        if rolling_success_rate >= 0.90 and average > self._best_average_reward:
+        if (rolling_success_rate > self._best_success_rate + 1e-9) or (abs(rolling_success_rate - self._best_success_rate) <= 1e-9 and average > self._best_average_reward):
             self._save_best_checkpoint_locked(rolling_success_rate, average)
         if self._high_success_streak >= 5 and not self._early_stopped:
             self._lock_policy_for_deployment_locked()
@@ -556,14 +629,16 @@ def create_server(config: LearnerConfig | None = None, model_name: str | None = 
     return server
 
 
-def serve(model_name: str | None = None) -> None:
+def serve(model_name: str | None = None, *, eval_mode: bool | None = None) -> None:
     config = LearnerConfig.from_environment()
+    if eval_mode is None:
+        eval_mode = config.eval_mode
     # Set these before any gRPC work is accepted. Limiting threads prevents a
     # small CPU actor/critic update from spawning enough native workers to make
     # the browser and desktop unresponsive.
     torch.set_num_threads(config.torch_num_threads)
     torch.set_num_interop_threads(config.torch_num_interop_threads)
-    server = create_server(config, model_name)
+    server = create_server(replace(config, eval_mode=bool(eval_mode)), model_name)
     server.start()
     LOGGER.info("server_started", extra={"fields": {"address": ADDRESS}})
 
@@ -589,4 +664,10 @@ if __name__ == "__main__":
         default=None,
         help="Optional checkpoint name to load or create. Example: grasp-v1",
     )
-    serve(parser.parse_args().model_name)
+    parser.add_argument(
+        "--eval",
+        action="store_true",
+        help="Run in deterministic evaluation mode and load the best checkpoint without updating gradients or replay data.",
+    )
+    args = parser.parse_args()
+    serve(args.model_name, eval_mode=args.eval)
