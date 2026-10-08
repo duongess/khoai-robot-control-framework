@@ -210,22 +210,26 @@ class LearnerConfig:
                 raise ValueError("transport_phase_threshold must be finite")
 
     @classmethod
-    def from_environment(cls) -> "LearnerConfig":
+    def from_environment(cls, *, controller_type_override: str | None = None) -> "LearnerConfig":
         try:
             graph_path = os.environ.get("LEARNER_GRAPH_PATH")
-            controller_type = os.environ.get("LEARNER_CONTROLLER", "mlp")
+            controller_type = controller_type_override or os.environ.get("LEARNER_CONTROLLER", "mlp")
+            graph_controller = controller_type in {"fly_connectome", "random_graph"}
             default_phase_gating = "true" if controller_type in {"fly_connectome", "random_graph"} else "false"
+            # A CLI architecture selection must not be invalidated by an old
+            # exported phase-gating variable from a previous graph run.
+            phase_gated_decoder = graph_controller if controller_type_override is not None else os.environ.get("LEARNER_PHASE_GATED_DECODER", default_phase_gating).lower() == "true"
             return cls(
                 state_dim=int(os.environ.get("LEARNER_STATE_DIM", "30")),
                 action_dim=int(os.environ.get("LEARNER_ACTION_DIM", "3")),
                 controller_type=controller_type,
-                base_policy=os.environ.get("LEARNER_BASE_POLICY", "connectome" if controller_type in {"fly_connectome", "random_graph"} else "closed_loop"),
+                base_policy=os.environ.get("LEARNER_BASE_POLICY", "connectome" if graph_controller else "closed_loop"),
                 graph_path=graph_path,
                 propagation_steps=int(os.environ.get("LEARNER_PROPAGATION_STEPS", "4")),
                 train_edge_gains=os.environ.get("LEARNER_TRAIN_EDGE_GAINS", "true").lower() == "true",
                 freeze_topology=os.environ.get("LEARNER_FREEZE_TOPOLOGY", "true").lower() == "true",
                 full_actor_unlock_step=int(os.environ.get("LEARNER_FULL_ACTOR_UNLOCK_STEP", "128")),
-                phase_gated_decoder=os.environ.get("LEARNER_PHASE_GATED_DECODER", default_phase_gating).lower() == "true",
+                phase_gated_decoder=phase_gated_decoder,
                 object_attached_observation_index=int(os.environ.get("LEARNER_OBJECT_ATTACHED_OBSERVATION_INDEX", "15")),
                 phase_observation_index=int(os.environ.get("LEARNER_PHASE_OBSERVATION_INDEX", "19")),
                 transport_phase_threshold=float(os.environ.get("LEARNER_TRANSPORT_PHASE_THRESHOLD", "0.0")),

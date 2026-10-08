@@ -394,9 +394,15 @@ type HealthCheckResponse struct {
 	TrainingStep  uint64                 `protobuf:"varint,3,opt,name=training_step,json=trainingStep,proto3" json:"training_step,omitempty"`
 	Device        string                 `protobuf:"bytes,4,opt,name=device,proto3" json:"device,omitempty"`
 	// Empty when this process is a new, unsaved learner.
-	ModelName     string `protobuf:"bytes,5,opt,name=model_name,json=modelName,proto3" json:"model_name,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	ModelName string `protobuf:"bytes,5,opt,name=model_name,json=modelName,proto3" json:"model_name,omitempty"`
+	// Immutable architecture selected when the learner process starts. A
+	// dashboard may display this value but must never use it to select an actor.
+	ControllerType string `protobuf:"bytes,6,opt,name=controller_type,json=controllerType,proto3" json:"controller_type,omitempty"`
+	// Human-readable architecture label for operator telemetry, for example
+	// "Parametric MLP (Dense)" or "Fly Connectome (Sparse)".
+	ActiveModelName string `protobuf:"bytes,7,opt,name=active_model_name,json=activeModelName,proto3" json:"active_model_name,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *HealthCheckResponse) Reset() {
@@ -460,6 +466,20 @@ func (x *HealthCheckResponse) GetDevice() string {
 func (x *HealthCheckResponse) GetModelName() string {
 	if x != nil {
 		return x.ModelName
+	}
+	return ""
+}
+
+func (x *HealthCheckResponse) GetControllerType() string {
+	if x != nil {
+		return x.ControllerType
+	}
+	return ""
+}
+
+func (x *HealthCheckResponse) GetActiveModelName() string {
+	if x != nil {
+		return x.ActiveModelName
 	}
 	return ""
 }
@@ -742,14 +762,16 @@ const file_learner_v1_learner_proto_rawDesc = "" +
 	"\x18actor_log_std_horizontal\x18\f \x01(\x02R\x15actorLogStdHorizontal\x123\n" +
 	"\x16actor_log_std_vertical\x18\r \x01(\x02R\x13actorLogStdVertical\x121\n" +
 	"\x15actor_log_std_gripper\x18\x0e \x01(\x02R\x12actorLogStdGripper\"\x14\n" +
-	"\x12HealthCheckRequest\"\xae\x01\n" +
+	"\x12HealthCheckRequest\"\x83\x02\n" +
 	"\x13HealthCheckResponse\x12\x14\n" +
 	"\x05ready\x18\x01 \x01(\bR\x05ready\x12%\n" +
 	"\x0epolicy_version\x18\x02 \x01(\x04R\rpolicyVersion\x12#\n" +
 	"\rtraining_step\x18\x03 \x01(\x04R\ftrainingStep\x12\x16\n" +
 	"\x06device\x18\x04 \x01(\tR\x06device\x12\x1d\n" +
 	"\n" +
-	"model_name\x18\x05 \x01(\tR\tmodelName\"\x17\n" +
+	"model_name\x18\x05 \x01(\tR\tmodelName\x12'\n" +
+	"\x0fcontroller_type\x18\x06 \x01(\tR\x0econtrollerType\x12*\n" +
+	"\x11active_model_name\x18\a \x01(\tR\x0factiveModelName\"\x17\n" +
 	"\x15SaveCheckpointRequest\"\x83\x01\n" +
 	"\x16SaveCheckpointResponse\x12\x1d\n" +
 	"\n" +

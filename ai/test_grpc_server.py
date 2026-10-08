@@ -6,7 +6,7 @@ import torch
 
 from ai.config import LearnerConfig
 from ai.checkpoints import validate_model_name
-from ai.grpc_server import EARLY_STOP_MESSAGE, LearnerServicer
+from ai.grpc_server import EARLY_STOP_MESSAGE, LearnerServicer, active_model_name
 from ai.test_connectome import _graph
 from gen.python.learner.v1 import environment_pb2, learner_pb2, transition_pb2
 
@@ -22,7 +22,22 @@ def test_health_and_batched_prediction_use_configured_dimensions():
     assert len(response.actions) == 2
     assert all(len(action.values) == 3 for action in response.actions)
     assert all(-1 <= value <= 1 for action in response.actions for value in action.values)
-    assert servicer.HealthCheck(learner_pb2.HealthCheckRequest(), AbortContext()).ready
+    health = servicer.HealthCheck(learner_pb2.HealthCheckRequest(), AbortContext())
+    assert health.ready
+    assert health.controller_type == "mlp"
+    assert health.active_model_name == "SAC MLP (Dense)"
+
+
+def test_active_model_name_reports_process_selected_architecture():
+    assert active_model_name("parametric_mlp") == "Parametric MLP (Dense)"
+    assert active_model_name("fly_connectome") == "Fly Connectome (Sparse)"
+
+
+def test_cli_controller_override_ignores_stale_graph_phase_gate(monkeypatch):
+    monkeypatch.setenv("LEARNER_PHASE_GATED_DECODER", "true")
+    config = LearnerConfig.from_environment(controller_type_override="parametric_mlp")
+    assert config.controller_type == "parametric_mlp"
+    assert not config.phase_gated_decoder
 
 
 def test_learner_forwards_configured_long_horizon_discount():
@@ -114,6 +129,15 @@ def test_checkpoint_round_trip_restores_complete_sac_training_state(tmp_path: Pa
     assert restored._samples_seen == servicer._samples_seen
     assert all(torch.equal(value, restored._agent.actor.state_dict()[name]) for name, value in saved_actor.items())
     assert restored._agent.alpha.item() == pytest.approx(servicer._agent.alpha.item())
+
+
+def test_checkpoint_cannot_replace_the_process_selected_controller(tmp_path: Path):
+    dense = LearnerConfig(state_dim=3, action_dim=3, checkpoint_dir=str(tmp_path), controller_type="mlp")
+    LearnerServicer(dense, model_name="dense-v1").SaveCheckpoint(learner_pb2.SaveCheckpointRequest(), AbortContext())
+
+    parametric = LearnerConfig(state_dim=3, action_dim=3, checkpoint_dir=str(tmp_path), controller_type="parametric_mlp")
+    with pytest.raises(ValueError, match="was started for"):
+        LearnerServicer(parametric, model_name="dense-v1")
 
 
 @pytest.mark.parametrize("name", ["../escape", "", "has space", "/tmp/model"])

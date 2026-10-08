@@ -52,10 +52,13 @@ type EpisodeStopResult struct {
 }
 
 type HealthStatus struct {
-	Ready         bool
-	PolicyVersion uint64
-	TrainingStep  uint64
-	Device        string
+	Ready           bool
+	PolicyVersion   uint64
+	TrainingStep    uint64
+	Device          string
+	ModelName       string
+	ControllerType  string
+	ActiveModelName string
 }
 
 type PredictionResult struct {
@@ -154,7 +157,10 @@ func (c *LearnerClient) HealthCheck(ctx context.Context) (HealthStatus, error) {
 	if err != nil {
 		return HealthStatus{}, fmt.Errorf("learner health check: %w", err)
 	}
-	return HealthStatus{Ready: response.GetReady(), PolicyVersion: response.GetPolicyVersion(), TrainingStep: response.GetTrainingStep(), Device: response.GetDevice()}, nil
+	return HealthStatus{
+		Ready: response.GetReady(), PolicyVersion: response.GetPolicyVersion(), TrainingStep: response.GetTrainingStep(), Device: response.GetDevice(),
+		ModelName: response.GetModelName(), ControllerType: response.GetControllerType(), ActiveModelName: response.GetActiveModelName(),
+	}, nil
 }
 
 func (c *LearnerClient) PredictBatch(ctx context.Context, states []State, policyVersion uint64) (PredictionResult, error) {

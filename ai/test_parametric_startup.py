@@ -88,6 +88,9 @@ def test_dense_parametric_learner_forwards_all_six_coefficients_without_zero_fal
         learner_pb2.PredictBatchRequest(states=[environment_pb2.State(values=state[0].tolist())]),
         AbortContext(),
     )
+    health = servicer.HealthCheck(learner_pb2.HealthCheckRequest(), AbortContext())
+    assert health.controller_type == "parametric_mlp"
+    assert health.active_model_name == "Parametric MLP (Dense)"
     assert list(response.fly_base_actions[0].values) == [0.0, 0.0, 0.0]
     assert response.residual_actions[0].values[1] < 0
     assert response.residual_actions[0].values[2] > 0

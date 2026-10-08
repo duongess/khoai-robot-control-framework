@@ -23,7 +23,7 @@ type learnerServiceStub struct {
 }
 
 func (s *learnerServiceStub) HealthCheck(context.Context, *learnerv1.HealthCheckRequest) (*learnerv1.HealthCheckResponse, error) {
-	return &learnerv1.HealthCheckResponse{Ready: true}, nil
+	return &learnerv1.HealthCheckResponse{Ready: true, ModelName: "dense-v1", ControllerType: "parametric_mlp", ActiveModelName: "Parametric MLP (Dense)"}, nil
 }
 
 func (s *learnerServiceStub) PredictBatch(_ context.Context, request *learnerv1.PredictBatchRequest) (*learnerv1.PredictBatchResponse, error) {
@@ -59,6 +59,9 @@ func TestLearnerClientHealthCheck(t *testing.T) {
 	}
 	if !health.Ready {
 		t.Fatal("HealthCheck() ready = false")
+	}
+	if health.ModelName != "dense-v1" || health.ControllerType != "parametric_mlp" || health.ActiveModelName != "Parametric MLP (Dense)" {
+		t.Fatalf("HealthCheck() identity = %#v", health)
 	}
 }
 

@@ -75,18 +75,22 @@ class HealthCheckRequest(_message.Message):
     def __init__(self) -> None: ...
 
 class HealthCheckResponse(_message.Message):
-    __slots__ = ("ready", "policy_version", "training_step", "device", "model_name")
+    __slots__ = ("ready", "policy_version", "training_step", "device", "model_name", "controller_type", "active_model_name")
     READY_FIELD_NUMBER: _ClassVar[int]
     POLICY_VERSION_FIELD_NUMBER: _ClassVar[int]
     TRAINING_STEP_FIELD_NUMBER: _ClassVar[int]
     DEVICE_FIELD_NUMBER: _ClassVar[int]
     MODEL_NAME_FIELD_NUMBER: _ClassVar[int]
+    CONTROLLER_TYPE_FIELD_NUMBER: _ClassVar[int]
+    ACTIVE_MODEL_NAME_FIELD_NUMBER: _ClassVar[int]
     ready: bool
     policy_version: int
     training_step: int
     device: str
     model_name: str
-    def __init__(self, ready: _Optional[bool] = ..., policy_version: _Optional[int] = ..., training_step: _Optional[int] = ..., device: _Optional[str] = ..., model_name: _Optional[str] = ...) -> None: ...
+    controller_type: str
+    active_model_name: str
+    def __init__(self, ready: _Optional[bool] = ..., policy_version: _Optional[int] = ..., training_step: _Optional[int] = ..., device: _Optional[str] = ..., model_name: _Optional[str] = ..., controller_type: _Optional[str] = ..., active_model_name: _Optional[str] = ...) -> None: ...
 
 class SaveCheckpointRequest(_message.Message):
     __slots__ = ()

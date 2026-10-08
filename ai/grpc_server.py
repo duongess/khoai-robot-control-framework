@@ -41,6 +41,18 @@ STOP_CONSECUTIVE_SUCCESSES = 20
 MAX_TRAINING_EPISODES = 150
 EARLY_STOP_MESSAGE = "[EARLY STOPPING TRIGGERED] Target achieved. Model locked at peak performance. Ready for evaluation."
 
+ACTIVE_MODEL_NAMES = {
+    "mlp": "SAC MLP (Dense)",
+    "parametric_mlp": "Parametric MLP (Dense)",
+    "fly_connectome": "Fly Connectome (Sparse)",
+    "random_graph": "Random Graph (Sparse)",
+}
+
+
+def active_model_name(controller_type: str) -> str:
+    """Return an operator-facing identity for the process-selected actor."""
+    return ACTIVE_MODEL_NAMES.get(controller_type, controller_type)
+
 
 def _upgrade_legacy_default_grip(config: object) -> dict | None:
     """Replace only the obsolete default grip channel in persisted registries."""
@@ -109,11 +121,14 @@ class LearnerServicer(learner_pb2_grpc.LearnerServiceServicer):
             self._config = requested_config
         else:
             try:
-                # Loading by name must work without making a user remember all
-                # controller/graph environment variables from the original run.
                 saved_config = LearnerConfig(**payload["learner_config"])
             except (TypeError, ValueError) as error:
                 raise ValueError(f"checkpoint {checkpoint.name} has an invalid learner configuration: {error}") from error
+            if saved_config.controller_type != requested_config.controller_type:
+                raise ValueError(
+                    f"checkpoint {checkpoint.name} uses controller {saved_config.controller_type!r}, "
+                    f"but this learner process was started for {requested_config.controller_type!r}"
+                )
             # The caller may deliberately move their local checkpoint directory;
             # retain that location while restoring every training setting.
             self._config = replace(saved_config, checkpoint_dir=requested_config.checkpoint_dir)
@@ -572,6 +587,8 @@ class LearnerServicer(learner_pb2_grpc.LearnerServiceServicer):
             training_step=self._training_step,
             device=str(self._agent.device),
             model_name=self._model_name,
+            controller_type=self._config.controller_type,
+            active_model_name=active_model_name(self._config.controller_type),
         )
 
     def SaveCheckpoint(self, request, context):
@@ -678,8 +695,13 @@ def create_server(config: LearnerConfig | None = None, model_name: str | None = 
     return server
 
 
-def serve(model_name: str | None = None, *, eval_mode: bool | None = None) -> None:
-    config = LearnerConfig.from_environment()
+def serve(
+    model_name: str | None = None,
+    *,
+    eval_mode: bool | None = None,
+    controller_type: str | None = None,
+) -> None:
+    config = LearnerConfig.from_environment(controller_type_override=controller_type)
     if eval_mode is None:
         eval_mode = config.eval_mode
     # Set these before any gRPC work is accepted. Limiting threads prevents a
@@ -718,5 +740,17 @@ if __name__ == "__main__":
         action="store_true",
         help="Run in deterministic evaluation mode and load the best checkpoint without updating gradients or replay data.",
     )
+    parser.add_argument(
+        "--controller",
+        choices=sorted(ACTIVE_MODEL_NAMES),
+        default=None,
+        help="Actor architecture for this process. Overrides LEARNER_CONTROLLER.",
+    )
     args = parser.parse_args()
-    serve(args.model_name, eval_mode=args.eval)
+    # Preserve named-checkpoint compatibility while making the documented
+    # `python -m ai.grpc_server parametric_mlp` startup select that architecture
+    # when no explicit --controller flag is supplied.
+    cli_controller = args.controller
+    if cli_controller is None and args.model_name in ACTIVE_MODEL_NAMES:
+        cli_controller = args.model_name
+    serve(args.model_name, eval_mode=args.eval, controller_type=cli_controller)

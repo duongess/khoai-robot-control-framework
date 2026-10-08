@@ -53,6 +53,12 @@ message HealthCheckResponse {
   string device = 4;
   // Empty when this process is a new, unsaved learner.
   string model_name = 5;
+  // Immutable architecture selected when the learner process starts. A
+  // dashboard may display this value but must never use it to select an actor.
+  string controller_type = 6;
+  // Human-readable architecture label for operator telemetry, for example
+  // "Parametric MLP (Dense)" or "Fly Connectome (Sparse)".
+  string active_model_name = 7;
 }
 
 // SaveCheckpoint persists the complete SAC training state under the learner's
