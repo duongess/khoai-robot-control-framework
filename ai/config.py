@@ -71,20 +71,21 @@ class SACConfig:
             raise ValueError("action dimension must be positive")
         if not 0 < self.gamma < 1:
             raise ValueError("gamma must be in (0, 1)")
-        if self.controller_type not in {"mlp", "fly_connectome", "random_graph"}:
-            raise ValueError("controller_type must be mlp, fly_connectome, or random_graph")
+        if self.controller_type not in {"mlp", "parametric_mlp", "fly_connectome", "random_graph"}:
+            raise ValueError("controller_type must be mlp, parametric_mlp, fly_connectome, or random_graph")
         if self.base_policy not in {"connectome", "closed_loop"}:
             raise ValueError("base_policy must be connectome or closed_loop")
-        if self.controller_type != "mlp" and not self.graph_path:
+        graph_controller = self.controller_type in {"fly_connectome", "random_graph"}
+        if graph_controller and not self.graph_path:
             raise ValueError("graph_path is required for graph controllers")
-        if self.graph_path and self.controller_type != "mlp" and not Path(self.graph_path).is_file():
+        if self.graph_path and graph_controller and not Path(self.graph_path).is_file():
             raise ValueError(f"connectome graph does not exist: {self.graph_path}")
         if not self.freeze_topology:
             raise ValueError("freeze_topology must remain true; creating graph edges is unsupported")
         if self.full_actor_unlock_step < 0:
             raise ValueError("full_actor_unlock_step must be non-negative")
         if self.phase_gated_decoder:
-            if self.controller_type == "mlp":
+            if not graph_controller:
                 raise ValueError("phase_gated_decoder requires a graph controller")
             indices = (self.object_attached_observation_index, self.phase_observation_index)
             if any(index < 0 or index >= self.state_dim for index in indices):
@@ -107,7 +108,7 @@ class SACConfig:
             self.vertical_acceleration_observation_index,
             self.previous_vertical_action_observation_index,
         )
-        if self.controller_type != "mlp" and any(index < -1 or index >= self.state_dim for index in tactile_indices):
+        if graph_controller and any(index < -1 or index >= self.state_dim for index in tactile_indices):
             raise ValueError("dual-loop tactile observation indices must be -1 or within state_dim")
 
 
@@ -176,6 +177,8 @@ class LearnerConfig:
             raise ValueError("log_every_n_requests must be positive")
         if not self.checkpoint_dir.strip():
             raise ValueError("checkpoint_dir must not be empty")
+        if self.controller_type not in {"mlp", "parametric_mlp", "fly_connectome", "random_graph"}:
+            raise ValueError("controller_type must be mlp, parametric_mlp, fly_connectome, or random_graph")
         if self.base_policy not in {"connectome", "closed_loop"}:
             raise ValueError("base_policy must be connectome or closed_loop")
         if self.full_actor_unlock_step < 0:
@@ -192,10 +195,11 @@ class LearnerConfig:
             self.vertical_acceleration_observation_index,
             self.previous_vertical_action_observation_index,
         )
-        if self.controller_type != "mlp" and any(index < 0 or index >= self.state_dim for index in tactile_indices):
+        graph_controller = self.controller_type in {"fly_connectome", "random_graph"}
+        if graph_controller and any(index < 0 or index >= self.state_dim for index in tactile_indices):
             raise ValueError("dual-loop tactile observation indices must be within state_dim")
         if self.phase_gated_decoder:
-            if self.controller_type == "mlp":
+            if not graph_controller:
                 raise ValueError("phase_gated_decoder requires a graph controller")
             indices = (self.object_attached_observation_index, self.phase_observation_index)
             if any(index < 0 or index >= self.state_dim for index in indices):

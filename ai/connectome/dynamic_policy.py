@@ -13,6 +13,10 @@ from torch.nn import functional as functional
 
 from ai.connectome.dynamic_reflex import DynamicReflexEngine, ReflexConfigError, ReflexFunctionConfig
 from ai.connectome.policy import FlyConnectomePolicy
+from ai.networks import ParametricMLPPolicy
+
+
+ParametricPolicy = FlyConnectomePolicy | ParametricMLPPolicy
 
 
 # Canonical signed-error law for the 30-feature force-control observation.
@@ -32,7 +36,7 @@ class _RegistryState:
     engine: DynamicReflexEngine
 
 
-def _state(policy: FlyConnectomePolicy) -> _RegistryState | None:
+def _state(policy: ParametricPolicy) -> _RegistryState | None:
     return getattr(policy, "_dynamic_reflex_registry", None)
 
 
@@ -57,7 +61,7 @@ def _apply_vertical_tracking_prior(config: ReflexFunctionConfig) -> ReflexFuncti
     return replace(config, channels=tuple(channels))
 
 
-def register_reflex_law(policy: FlyConnectomePolicy, config_dict: Mapping[str, Any]) -> dict[str, Any]:
+def register_reflex_law(policy: ParametricPolicy, config_dict: Mapping[str, Any]) -> dict[str, Any]:
     """Install a law whose *only* stochastic actor output is its parameters."""
     config = config_dict if isinstance(config_dict, ReflexFunctionConfig) else ReflexFunctionConfig.from_dict(config_dict)
     config = _apply_vertical_tracking_prior(config)
@@ -69,8 +73,8 @@ def register_reflex_law(policy: FlyConnectomePolicy, config_dict: Mapping[str, A
     engine = DynamicReflexEngine(config)  # Compile and validate before state changes.
     if config.parameter_count == 0:
         raise ReflexConfigError("a Parametric SAC reflex requires at least one free parameter")
-    reference = policy.base_head[0].weight
-    head = nn.Linear(reference.shape[1], config.parameter_count, device=reference.device, dtype=reference.dtype)
+    reference = next(policy.parameters())
+    head = nn.Linear(policy.context_dim, config.parameter_count, device=reference.device, dtype=reference.dtype)
     low = torch.tensor([spec.min_val for channel in config.channels for spec in channel.parameters], dtype=reference.dtype, device=reference.device)
     high = torch.tensor([spec.max_val for channel in config.channels for spec in channel.parameters], dtype=reference.dtype, device=reference.device)
     defaults = torch.tensor([spec.default for channel in config.channels for spec in channel.parameters], dtype=reference.dtype, device=reference.device)
@@ -90,26 +94,32 @@ def register_reflex_law(policy: FlyConnectomePolicy, config_dict: Mapping[str, A
     return config.to_dict()
 
 
-def register_default_gantry_reflex_law(policy: FlyConnectomePolicy) -> dict[str, Any]:
+def register_default_gantry_reflex_law(policy: ParametricPolicy) -> dict[str, Any]:
     return register_reflex_law(policy, DEFAULT_GANTRY_REFLEX_CONFIG)
 
 
-def clear_reflex_law(policy: FlyConnectomePolicy) -> None:
+def clear_reflex_law(policy: ParametricPolicy) -> None:
     policy.parameter_head = None
     policy.parameter_log_std = None
-    policy.reflex_parameter_min = torch.empty(0, device=policy.base_head[0].weight.device)
-    policy.reflex_parameter_max = torch.empty(0, device=policy.base_head[0].weight.device)
+    reference = next(policy.parameters())
+    policy.reflex_parameter_min = torch.empty(0, device=reference.device, dtype=reference.dtype)
+    policy.reflex_parameter_max = torch.empty(0, device=reference.device, dtype=reference.dtype)
     policy._dynamic_reflex_registry = None
 
 
-def reflex_parameter_count(policy: FlyConnectomePolicy) -> int:
+def reflex_parameter_count(policy: ParametricPolicy) -> int:
     state = _state(policy)
     return 0 if state is None else state.config.parameter_count
 
 
-def _parameter_mapping(policy: FlyConnectomePolicy, values: torch.Tensor) -> dict[str, torch.Tensor]:
+def _parameter_mapping(policy: ParametricPolicy, values: torch.Tensor) -> dict[str, torch.Tensor]:
     state = _state(policy)
     assert state is not None
+    if values.ndim != 2 or values.shape[1] != state.config.parameter_count:
+        raise RuntimeError(
+            f"Parametric SAC produced {tuple(values.shape)} parameters; "
+            f"expected (batch, {state.config.parameter_count})"
+        )
     mapped: dict[str, torch.Tensor] = {}
     offset = 0
     for channel_index, channel in enumerate(state.config.channels):
@@ -118,22 +128,24 @@ def _parameter_mapping(policy: FlyConnectomePolicy, values: torch.Tensor) -> dic
             mapped[DynamicReflexEngine.parameter_key(channel_index, spec.name)] = values[:, offset]
             mapped[f"{channel_name}.{spec.name}"] = values[:, offset]
             offset += 1
+    if offset != values.shape[1]:
+        raise RuntimeError("Parametric SAC did not consume the complete theta vector")
     return mapped
 
 
-def _parameter_statistics(policy: FlyConnectomePolicy, observation: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+def _parameter_statistics(policy: ParametricPolicy, observation: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
     if _state(policy) is None or policy.parameter_head is None or policy.parameter_log_std is None:
         raise RuntimeError("no Parametric SAC reflex law is registered")
-    latent = policy._connectome_latent(observation)
-    return policy.parameter_head(latent), policy.parameter_log_std.clamp(policy.min_log_std, 2).expand(len(observation), -1)
+    context = policy._policy_context(observation)
+    return policy.parameter_head(context), policy.parameter_log_std.clamp(policy.min_log_std, 2).expand(len(observation), -1)
 
 
-def _bound_parameters(policy: FlyConnectomePolicy, raw_parameters: torch.Tensor) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+def _bound_parameters(policy: ParametricPolicy, raw_parameters: torch.Tensor) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
     values = policy.reflex_parameter_min + (policy.reflex_parameter_max - policy.reflex_parameter_min) * torch.sigmoid(raw_parameters)
     return values, _parameter_mapping(policy, values)
 
 
-def bounded_reflex_parameters(policy: FlyConnectomePolicy, observation: torch.Tensor) -> dict[str, torch.Tensor]:
+def bounded_reflex_parameters(policy: ParametricPolicy, observation: torch.Tensor) -> dict[str, torch.Tensor]:
     """Deterministic, bounded parameter telemetry at the supplied state."""
     mean, _ = _parameter_statistics(policy, observation)
     return _bound_parameters(policy, mean)[1]
@@ -275,28 +287,40 @@ _original_forward = FlyConnectomePolicy.forward
 _original_load_state_dict = FlyConnectomePolicy.load_state_dict
 
 
-def sample_decomposed(policy: FlyConnectomePolicy, observation: torch.Tensor, deterministic: bool = False):
+def sample_decomposed(policy: ParametricPolicy, observation: torch.Tensor, deterministic: bool = False):
     if _state(policy) is None:
-        return _original_sample_decomposed(policy, observation, deterministic)
+        if isinstance(policy, FlyConnectomePolicy):
+            return _original_sample_decomposed(policy, observation, deterministic)
+        raise RuntimeError("no Parametric SAC reflex law is registered")
     action, _, log_probability, _ = _sample_parametric(policy, observation, deterministic)
-    # The protocol retains the decomposition fields, but Parametric SAC has no
-    # direct residual actuator branch. ``fly_base`` is f(x; theta_SAC).
+    if policy.parametric_action_stream == "residual":
+        # Dense SAC+f(x) is the complete pure-RL policy. It has no fly-base
+        # context, so carry the evaluated reflex action in the residual stream.
+        return action, torch.zeros_like(action), action, log_probability
+    # Connectome Parametric SAC carries f(x; theta) in the fly-base stream.
     return action, action, torch.zeros_like(action), log_probability
 
 
-def forward(policy: FlyConnectomePolicy, observation: torch.Tensor):
+def sample(policy: ParametricPolicy, observation: torch.Tensor, deterministic: bool = False):
+    action, _, _, log_probability = sample_decomposed(policy, observation, deterministic)
+    return action, log_probability
+
+
+def forward(policy: ParametricPolicy, observation: torch.Tensor):
     if _state(policy) is None:
-        return _original_forward(policy, observation)
+        if isinstance(policy, FlyConnectomePolicy):
+            return _original_forward(policy, observation)
+        raise RuntimeError("no Parametric SAC reflex law is registered")
     action, log_std, _, _ = _sample_parametric(policy, observation, deterministic=True)
     return action, log_std
 
 
-def get_extra_state(policy: FlyConnectomePolicy) -> dict[str, Any]:
+def get_extra_state(policy: ParametricPolicy) -> dict[str, Any]:
     state = _state(policy)
     return {"reflex_config": None if state is None else state.config.to_dict()}
 
 
-def set_extra_state(policy: FlyConnectomePolicy, payload: Any) -> None:
+def set_extra_state(policy: ParametricPolicy, payload: Any) -> None:
     if payload is None:
         clear_reflex_law(policy)
     elif not isinstance(payload, Mapping) or set(payload) != {"reflex_config"}:
@@ -307,21 +331,23 @@ def set_extra_state(policy: FlyConnectomePolicy, payload: Any) -> None:
         register_reflex_law(policy, payload["reflex_config"])
 
 
-def load_state_dict(policy: FlyConnectomePolicy, state_dict: Mapping[str, Any], strict: bool = True, assign: bool = False):
+def load_state_dict(policy: ParametricPolicy, state_dict: Mapping[str, Any], strict: bool = True, assign: bool = False):
     if "_extra_state" in state_dict:
         set_extra_state(policy, state_dict["_extra_state"])
     return _original_load_state_dict(policy, state_dict, strict=strict, assign=assign)
 
 
-FlyConnectomePolicy.register_reflex_law = register_reflex_law
-FlyConnectomePolicy.register_default_gantry_reflex_law = register_default_gantry_reflex_law
-FlyConnectomePolicy.clear_reflex_law = clear_reflex_law
-FlyConnectomePolicy.reflex_parameter_count = property(reflex_parameter_count)
-FlyConnectomePolicy.bounded_reflex_parameters = bounded_reflex_parameters
-FlyConnectomePolicy.reflex_parameter_telemetry = reflex_parameter_telemetry
-FlyConnectomePolicy.export_reflex_parameter_telemetry = reflex_parameter_telemetry
-FlyConnectomePolicy.sample_decomposed = sample_decomposed
-FlyConnectomePolicy.forward = forward
-FlyConnectomePolicy.get_extra_state = get_extra_state
-FlyConnectomePolicy.set_extra_state = set_extra_state
-FlyConnectomePolicy.load_state_dict = load_state_dict
+for _policy_type in (FlyConnectomePolicy, ParametricMLPPolicy):
+    _policy_type.register_reflex_law = register_reflex_law
+    _policy_type.register_default_gantry_reflex_law = register_default_gantry_reflex_law
+    _policy_type.clear_reflex_law = clear_reflex_law
+    _policy_type.reflex_parameter_count = property(reflex_parameter_count)
+    _policy_type.bounded_reflex_parameters = bounded_reflex_parameters
+    _policy_type.reflex_parameter_telemetry = reflex_parameter_telemetry
+    _policy_type.export_reflex_parameter_telemetry = reflex_parameter_telemetry
+    _policy_type.sample_decomposed = sample_decomposed
+    _policy_type.sample = sample
+    _policy_type.forward = forward
+    _policy_type.get_extra_state = get_extra_state
+    _policy_type.set_extra_state = set_extra_state
+    _policy_type.load_state_dict = load_state_dict

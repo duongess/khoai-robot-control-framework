@@ -91,6 +91,8 @@ class FlyConnectomePolicy(nn.Module):
 
         self.observation_dim = observation_dim
         self.action_dim = action_dim
+        self.context_dim = hidden_dim
+        self.parametric_action_stream = "base"
         self.node_count = graph.node_count
         self.propagation_steps = propagation_steps
         self.action_dead_zone = action_dead_zone
@@ -103,6 +105,28 @@ class FlyConnectomePolicy(nn.Module):
         self.register_buffer("adjacency", graph.torch_adjacency())
         self.register_buffer("base_edge_weights", torch.tensor(graph.weights, dtype=torch.float32))
         self.register_buffer("edge_indices", torch.tensor(graph.edge_index[[1, 0]], dtype=torch.long))
+
+        # Keep the original COO buffers above for checkpoint compatibility, but
+        # derive an immutable CSR topology once. Parallel edges map to the same
+        # CSR value and are summed with index_add() during training. This avoids
+        # rebuilding and coalescing a COO tensor on every propagation.
+        linear_edge_indices = self.edge_indices[0] * graph.node_count + self.edge_indices[1]
+        unique_edges, csr_value_indices = torch.unique(
+            linear_edge_indices,
+            sorted=True,
+            return_inverse=True,
+        )
+        csr_rows = torch.div(unique_edges, graph.node_count, rounding_mode="floor")
+        csr_columns = torch.remainder(unique_edges, graph.node_count)
+        row_counts = torch.bincount(csr_rows, minlength=graph.node_count)
+        csr_crow_indices = torch.zeros(graph.node_count + 1, dtype=torch.long)
+        csr_crow_indices[1:] = torch.cumsum(row_counts, dim=0)
+        self.register_buffer("_csr_crow_indices", csr_crow_indices, persistent=False)
+        self.register_buffer("_csr_col_indices", csr_columns, persistent=False)
+        self.register_buffer("_csr_value_indices", csr_value_indices, persistent=False)
+        # Published actors are immutable eval-mode snapshots. Their fully
+        # weighted adjacency can therefore be cached after its first inference.
+        self.register_buffer("_inference_adjacency", None, persistent=False)
         self.register_buffer("sensory_indices", torch.tensor(sensory_indices, dtype=torch.long))
         self.sensory_encoder = nn.Sequential(nn.Linear(observation_dim, hidden_dim), nn.Tanh(), nn.Linear(hidden_dim, len(sensory_indices)))
         self.neuron_bias = nn.Parameter(torch.zeros(graph.node_count))
@@ -175,6 +199,10 @@ class FlyConnectomePolicy(nn.Module):
         channels = torch.stack([state[:, self._motor_group_indices[name]].mean(dim=1) for name in MOTOR_CHANNELS], dim=1)
         channels = self._apply_motor_decoder_heads(channels, observation)
         return self.latent_projection(channels)
+
+    def _policy_context(self, observation: torch.Tensor) -> torch.Tensor:
+        """Return the context consumed by the shared parametric-reflex head."""
+        return self._connectome_latent(observation)
 
     def _closed_loop_base_reflex(self, observation: torch.Tensor) -> torch.Tensor:
         """Closed-loop fly-base control for spatial tracking and stable grasping.
@@ -397,9 +425,24 @@ class FlyConnectomePolicy(nn.Module):
         return actions.clamp(-1.0, 1.0)
 
     def _weighted_adjacency(self) -> torch.Tensor:
-        values = self.base_edge_weights * torch.exp(self.edge_log_gains.clamp(-4, 4))
-        # Sparse coalescing handles parallel edges while preserving source->target.
-        return torch.sparse_coo_tensor(self.edge_indices, values, self.adjacency.shape, device=values.device, check_invariants=False).coalesce()
+        if not self.training and self._inference_adjacency is not None:
+            return self._inference_adjacency
+
+        edge_values = self.base_edge_weights * torch.exp(self.edge_log_gains.clamp(-4, 4))
+        csr_values = edge_values.new_zeros(self._csr_col_indices.numel())
+        csr_values = csr_values.index_add(0, self._csr_value_indices, edge_values)
+        adjacency = torch.sparse_csr_tensor(
+            self._csr_crow_indices,
+            self._csr_col_indices,
+            csr_values,
+            size=self.adjacency.shape,
+            dtype=csr_values.dtype,
+            device=csr_values.device,
+            check_invariants=False,
+        )
+        if not self.training and not torch.is_grad_enabled():
+            self._inference_adjacency = adjacency.detach()
+        return adjacency
 
 
 class RandomGraphPolicy(FlyConnectomePolicy):

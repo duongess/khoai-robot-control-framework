@@ -159,9 +159,10 @@ class LearnerServicer(learner_pb2_grpc.LearnerServiceServicer):
             self._agent.critic_one.eval()
             self._agent.critic_two.eval()
             self._agent.log_alpha.requires_grad_(False)
-        # A new graph learner must never silently serve the legacy residual actor.
+        # A new parametric learner must publish its registered six-coefficient
+        # reflex before the first immutable actor snapshot is created.
         # Checkpoints restore their own persisted schema in _restore_checkpoint.
-        if payload is None and self._config.controller_type in {"fly_connectome", "random_graph"}:
+        if payload is None and self._config.controller_type in {"parametric_mlp", "fly_connectome", "random_graph"}:
             self._agent.register_reflex_law(DEFAULT_GANTRY_REFLEX_CONFIG)
         self._samples_seen = 0
         # Version zero is reserved by the protocol for "latest". Every actual
@@ -191,8 +192,8 @@ class LearnerServicer(learner_pb2_grpc.LearnerServiceServicer):
         if payload is not None:
             self._restore_checkpoint(payload, checkpoint)
             # Legacy checkpoints predate the registry. Upgrade them at boot
-            # rather than reviving the residual branch for a new episode.
-            if self._config.controller_type in {"fly_connectome", "random_graph"}:
+            # rather than serving an actor with no parameter-space reflex.
+            if self._config.controller_type in {"parametric_mlp", "fly_connectome", "random_graph"}:
                 if not self._agent.actor.reflex_parameter_count:
                     self._agent.register_reflex_law(DEFAULT_GANTRY_REFLEX_CONFIG)
                     self._actor_snapshots = {self._policy_version: deepcopy(self._agent.actor).eval()}
@@ -223,24 +224,45 @@ class LearnerServicer(learner_pb2_grpc.LearnerServiceServicer):
                     grpc.StatusCode.FAILED_PRECONDITION,
                     f"policy snapshot {served_version} is unavailable; start a fresh episode",
                 )
+
+            self._predict_requests += 1
+            should_log = self._predict_requests % self._config.log_every_n_requests == 0
             with torch.inference_mode():
-                mean, log_std = actor(states)
                 predicted_actions, fly_base_actions, residual_actions = self._agent.act_with_actor_components(
                     actor, states, deterministic=deterministic
                 )
+                # For every parameter-space policy, the primary protobuf action
+                # is authoritative f(x; theta), never an unbounded parameter-head
+                # output or a zero placeholder. Dense parametric MLP publishes
+                # that command in the residual stream; connectome Parametric SAC
+                # publishes it in the fly-base stream.
+                if getattr(actor, "reflex_parameter_count", 0):
+                    parametric_stream = getattr(actor, "parametric_action_stream", "base")
+                    evaluated_reflex_actions = (
+                        residual_actions if parametric_stream == "residual" else fly_base_actions
+                    )
+                    if not torch.equal(predicted_actions, evaluated_reflex_actions):
+                        raise RuntimeError(
+                            "parametric actor primary action diverged from evaluated f(x; theta)"
+                        )
+                    predicted_actions = evaluated_reflex_actions
                 predicted_actions = predicted_actions.clamp(-1, 1)
+                # Actor statistics are diagnostic only. In particular, a graph
+                # actor performs a full sparse propagation in forward(), so do
+                # not pay for a second actor pass on ordinary control requests.
+                if should_log:
+                    mean, log_std = actor(states)
         except ValueError as error:
             context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(error))
         actions = [environment_pb2.Action(values=[float(value) for value in action]) for action in predicted_actions]
         fly_base = [environment_pb2.Action(values=[float(value) for value in action]) for action in fly_base_actions]
         residuals = [environment_pb2.Action(values=[float(value) for value in action]) for action in residual_actions]
-        self._predict_requests += 1
-        if self._predict_requests % self._config.log_every_n_requests == 0:
+        if should_log:
             LOGGER.info("predict_batch", extra={"fields": {
                 "states": len(request.states),
                 "requested_policy_version": request.policy_version,
                 "policy_version": served_version,
-                "deterministic": self._config.deterministic_inference,
+                "deterministic": deterministic,
                 "action_mean": [float(value) for value in predicted_actions.mean(dim=0)],
                 "action_std": [float(value) for value in predicted_actions.std(dim=0, unbiased=False)],
                 "fly_base_mean": [float(value) for value in fly_base_actions.mean(dim=0)],
