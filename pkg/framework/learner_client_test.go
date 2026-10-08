@@ -29,9 +29,10 @@ func (s *learnerServiceStub) HealthCheck(context.Context, *learnerv1.HealthCheck
 func (s *learnerServiceStub) PredictBatch(_ context.Context, request *learnerv1.PredictBatchRequest) (*learnerv1.PredictBatchResponse, error) {
 	s.predictRequest = request
 	return &learnerv1.PredictBatchResponse{
-		Actions:         []*learnerv1.Action{{Values: []float32{0.5}}, {Values: []float32{0.5}}},
-		FlyBaseActions:  []*learnerv1.Action{{Values: []float32{0.3}}, {Values: []float32{0.3}}},
-		ResidualActions: []*learnerv1.Action{{Values: []float32{0.2}}, {Values: []float32{0.2}}},
+		Actions:          []*learnerv1.Action{{Values: []float32{0.5}}, {Values: []float32{0.5}}},
+		FlyBaseActions:   []*learnerv1.Action{{Values: []float32{0.3}}, {Values: []float32{0.3}}},
+		ResidualActions:  []*learnerv1.Action{{Values: []float32{0.2}}, {Values: []float32{0.2}}},
+		ReflexParameters: []*learnerv1.ReflexParameter{{Name: "vertical.a", Values: []float32{-0.8, -0.7}, MinValue: -1, MaxValue: 1, DefaultValue: -0.5}},
 	}, nil
 }
 
@@ -83,6 +84,9 @@ func TestLearnerClientPredictBatchMapsStatesAndActions(t *testing.T) {
 	}
 	if len(prediction.FlyBaseActions) != 2 || prediction.FlyBaseActions[0][0] != 0.3 || len(prediction.ResidualActions) != 2 || prediction.ResidualActions[0][0] != 0.2 {
 		t.Fatalf("PredictBatch() decomposition = base %#v residual %#v", prediction.FlyBaseActions, prediction.ResidualActions)
+	}
+	if len(prediction.ReflexParameters) != 1 || prediction.ReflexParameters[0].Name != "vertical.a" || prediction.ReflexParameters[0].Values[1] != -0.7 {
+		t.Fatalf("PredictBatch() reflex parameters = %#v", prediction.ReflexParameters)
 	}
 }
 

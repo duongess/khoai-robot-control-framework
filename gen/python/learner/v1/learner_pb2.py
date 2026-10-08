@@ -26,7 +26,7 @@ from learner.v1 import environment_pb2 as learner_dot_v1_dot_environment__pb2
 from learner.v1 import transition_pb2 as learner_dot_v1_dot_transition__pb2
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x18learner/v1/learner.proto\x12\nlearner.v1\x1a\x1clearner/v1/environment.proto\x1a\x1blearner/v1/transition.proto\"\x88\x01\n\x13PredictBatchRequest\x12\x36\n\x0b\x65nvironment\x18\x01 \x01(\x0b\x32!.learner.v1.EnvironmentDescriptor\x12!\n\x06states\x18\x02 \x03(\x0b\x32\x11.learner.v1.State\x12\x16\n\x0epolicy_version\x18\x03 \x01(\x04\"\xaf\x01\n\x14PredictBatchResponse\x12#\n\x07\x61\x63tions\x18\x01 \x03(\x0b\x32\x12.learner.v1.Action\x12\x16\n\x0epolicy_version\x18\x02 \x01(\x04\x12,\n\x10\x66ly_base_actions\x18\x03 \x03(\x0b\x32\x12.learner.v1.Action\x12,\n\x10residual_actions\x18\x04 \x03(\x0b\x32\x12.learner.v1.Action\"W\n\x11TrainBatchRequest\x12*\n\x05\x62\x61tch\x18\x01 \x01(\x0b\x32\x1b.learner.v1.TransitionBatch\x12\x16\n\x0epolicy_version\x18\x02 \x01(\x04\"\xd5\x02\n\x12TrainBatchResponse\x12\x10\n\x08\x61\x63\x63\x65pted\x18\x01 \x01(\x08\x12\x14\n\x0csamples_seen\x18\x02 \x01(\x04\x12\x16\n\x0epolicy_version\x18\x03 \x01(\x04\x12\x12\n\nactor_loss\x18\x04 \x01(\x02\x12\x13\n\x0b\x63ritic_loss\x18\x05 \x01(\x02\x12\x12\n\nalpha_loss\x18\x06 \x01(\x02\x12\x0f\n\x07\x65ntropy\x18\x07 \x01(\x02\x12\x15\n\rtraining_step\x18\x08 \x01(\x04\x12\x14\n\x0c\x63ritic_one_q\x18\t \x01(\x02\x12\x14\n\x0c\x63ritic_two_q\x18\n \x01(\x02\x12\r\n\x05\x61lpha\x18\x0b \x01(\x02\x12 \n\x18\x61\x63tor_log_std_horizontal\x18\x0c \x01(\x02\x12\x1e\n\x16\x61\x63tor_log_std_vertical\x18\r \x01(\x02\x12\x1d\n\x15\x61\x63tor_log_std_gripper\x18\x0e \x01(\x02\"\x14\n\x12HealthCheckRequest\"\xab\x01\n\x13HealthCheckResponse\x12\r\n\x05ready\x18\x01 \x01(\x08\x12\x16\n\x0epolicy_version\x18\x02 \x01(\x04\x12\x15\n\rtraining_step\x18\x03 \x01(\x04\x12\x0e\n\x06\x64\x65vice\x18\x04 \x01(\t\x12\x12\n\nmodel_name\x18\x05 \x01(\t\x12\x17\n\x0f\x63ontroller_type\x18\x06 \x01(\t\x12\x19\n\x11\x61\x63tive_model_name\x18\x07 \x01(\t\"\x17\n\x15SaveCheckpointRequest\"[\n\x16SaveCheckpointResponse\x12\x12\n\nmodel_name\x18\x01 \x01(\t\x12\x16\n\x0epolicy_version\x18\x02 \x01(\x04\x12\x15\n\rtraining_step\x18\x03 \x01(\x04\"Y\n\x1aRecordEpisodeResultRequest\x12\x12\n\nepisode_id\x18\x01 \x01(\t\x12\x0f\n\x07success\x18\x02 \x01(\x08\x12\x16\n\x0e\x65pisode_reward\x18\x03 \x01(\x02\"\x9d\x01\n\x1bRecordEpisodeResultResponse\x12\x15\n\rstop_training\x18\x01 \x01(\x08\x12\x1a\n\x12\x63ompleted_episodes\x18\x02 \x01(\x04\x12\x1c\n\x14rolling_success_rate\x18\x03 \x01(\x02\x12\x1d\n\x15\x63onsecutive_successes\x18\x04 \x01(\x04\x12\x0e\n\x06reason\x18\x05 \x01(\t2\xc1\x03\n\x0eLearnerService\x12Q\n\x0cPredictBatch\x12\x1f.learner.v1.PredictBatchRequest\x1a .learner.v1.PredictBatchResponse\x12K\n\nTrainBatch\x12\x1d.learner.v1.TrainBatchRequest\x1a\x1e.learner.v1.TrainBatchResponse\x12N\n\x0bHealthCheck\x12\x1e.learner.v1.HealthCheckRequest\x1a\x1f.learner.v1.HealthCheckResponse\x12W\n\x0eSaveCheckpoint\x12!.learner.v1.SaveCheckpointRequest\x1a\".learner.v1.SaveCheckpointResponse\x12\x66\n\x13RecordEpisodeResult\x12&.learner.v1.RecordEpisodeResultRequest\x1a\'.learner.v1.RecordEpisodeResultResponseBOZMgithub.com/duongess/khoai-robot-control-framework/gen/go/learner/v1;learnerv1b\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x18learner/v1/learner.proto\x12\nlearner.v1\x1a\x1clearner/v1/environment.proto\x1a\x1blearner/v1/transition.proto\"\x88\x01\n\x13PredictBatchRequest\x12\x36\n\x0b\x65nvironment\x18\x01 \x01(\x0b\x32!.learner.v1.EnvironmentDescriptor\x12!\n\x06states\x18\x02 \x03(\x0b\x32\x11.learner.v1.State\x12\x16\n\x0epolicy_version\x18\x03 \x01(\x04\"\xe7\x01\n\x14PredictBatchResponse\x12#\n\x07\x61\x63tions\x18\x01 \x03(\x0b\x32\x12.learner.v1.Action\x12\x16\n\x0epolicy_version\x18\x02 \x01(\x04\x12,\n\x10\x66ly_base_actions\x18\x03 \x03(\x0b\x32\x12.learner.v1.Action\x12,\n\x10residual_actions\x18\x04 \x03(\x0b\x32\x12.learner.v1.Action\x12\x36\n\x11reflex_parameters\x18\x05 \x03(\x0b\x32\x1b.learner.v1.ReflexParameter\"l\n\x0fReflexParameter\x12\x0c\n\x04name\x18\x01 \x01(\t\x12\x0e\n\x06values\x18\x02 \x03(\x02\x12\x11\n\tmin_value\x18\x03 \x01(\x02\x12\x11\n\tmax_value\x18\x04 \x01(\x02\x12\x15\n\rdefault_value\x18\x05 \x01(\x02\"W\n\x11TrainBatchRequest\x12*\n\x05\x62\x61tch\x18\x01 \x01(\x0b\x32\x1b.learner.v1.TransitionBatch\x12\x16\n\x0epolicy_version\x18\x02 \x01(\x04\"\xd5\x02\n\x12TrainBatchResponse\x12\x10\n\x08\x61\x63\x63\x65pted\x18\x01 \x01(\x08\x12\x14\n\x0csamples_seen\x18\x02 \x01(\x04\x12\x16\n\x0epolicy_version\x18\x03 \x01(\x04\x12\x12\n\nactor_loss\x18\x04 \x01(\x02\x12\x13\n\x0b\x63ritic_loss\x18\x05 \x01(\x02\x12\x12\n\nalpha_loss\x18\x06 \x01(\x02\x12\x0f\n\x07\x65ntropy\x18\x07 \x01(\x02\x12\x15\n\rtraining_step\x18\x08 \x01(\x04\x12\x14\n\x0c\x63ritic_one_q\x18\t \x01(\x02\x12\x14\n\x0c\x63ritic_two_q\x18\n \x01(\x02\x12\r\n\x05\x61lpha\x18\x0b \x01(\x02\x12 \n\x18\x61\x63tor_log_std_horizontal\x18\x0c \x01(\x02\x12\x1e\n\x16\x61\x63tor_log_std_vertical\x18\r \x01(\x02\x12\x1d\n\x15\x61\x63tor_log_std_gripper\x18\x0e \x01(\x02\"\x14\n\x12HealthCheckRequest\"\xab\x01\n\x13HealthCheckResponse\x12\r\n\x05ready\x18\x01 \x01(\x08\x12\x16\n\x0epolicy_version\x18\x02 \x01(\x04\x12\x15\n\rtraining_step\x18\x03 \x01(\x04\x12\x0e\n\x06\x64\x65vice\x18\x04 \x01(\t\x12\x12\n\nmodel_name\x18\x05 \x01(\t\x12\x17\n\x0f\x63ontroller_type\x18\x06 \x01(\t\x12\x19\n\x11\x61\x63tive_model_name\x18\x07 \x01(\t\"\x17\n\x15SaveCheckpointRequest\"[\n\x16SaveCheckpointResponse\x12\x12\n\nmodel_name\x18\x01 \x01(\t\x12\x16\n\x0epolicy_version\x18\x02 \x01(\x04\x12\x15\n\rtraining_step\x18\x03 \x01(\x04\"Y\n\x1aRecordEpisodeResultRequest\x12\x12\n\nepisode_id\x18\x01 \x01(\t\x12\x0f\n\x07success\x18\x02 \x01(\x08\x12\x16\n\x0e\x65pisode_reward\x18\x03 \x01(\x02\"\x9d\x01\n\x1bRecordEpisodeResultResponse\x12\x15\n\rstop_training\x18\x01 \x01(\x08\x12\x1a\n\x12\x63ompleted_episodes\x18\x02 \x01(\x04\x12\x1c\n\x14rolling_success_rate\x18\x03 \x01(\x02\x12\x1d\n\x15\x63onsecutive_successes\x18\x04 \x01(\x04\x12\x0e\n\x06reason\x18\x05 \x01(\t2\xc1\x03\n\x0eLearnerService\x12Q\n\x0cPredictBatch\x12\x1f.learner.v1.PredictBatchRequest\x1a .learner.v1.PredictBatchResponse\x12K\n\nTrainBatch\x12\x1d.learner.v1.TrainBatchRequest\x1a\x1e.learner.v1.TrainBatchResponse\x12N\n\x0bHealthCheck\x12\x1e.learner.v1.HealthCheckRequest\x1a\x1f.learner.v1.HealthCheckResponse\x12W\n\x0eSaveCheckpoint\x12!.learner.v1.SaveCheckpointRequest\x1a\".learner.v1.SaveCheckpointResponse\x12\x66\n\x13RecordEpisodeResult\x12&.learner.v1.RecordEpisodeResultRequest\x1a\'.learner.v1.RecordEpisodeResultResponseBOZMgithub.com/duongess/khoai-robot-control-framework/gen/go/learner/v1;learnerv1b\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -37,23 +37,25 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['_PREDICTBATCHREQUEST']._serialized_start=100
   _globals['_PREDICTBATCHREQUEST']._serialized_end=236
   _globals['_PREDICTBATCHRESPONSE']._serialized_start=239
-  _globals['_PREDICTBATCHRESPONSE']._serialized_end=414
-  _globals['_TRAINBATCHREQUEST']._serialized_start=416
-  _globals['_TRAINBATCHREQUEST']._serialized_end=503
-  _globals['_TRAINBATCHRESPONSE']._serialized_start=506
-  _globals['_TRAINBATCHRESPONSE']._serialized_end=847
-  _globals['_HEALTHCHECKREQUEST']._serialized_start=849
-  _globals['_HEALTHCHECKREQUEST']._serialized_end=869
-  _globals['_HEALTHCHECKRESPONSE']._serialized_start=872
-  _globals['_HEALTHCHECKRESPONSE']._serialized_end=1043
-  _globals['_SAVECHECKPOINTREQUEST']._serialized_start=1045
-  _globals['_SAVECHECKPOINTREQUEST']._serialized_end=1068
-  _globals['_SAVECHECKPOINTRESPONSE']._serialized_start=1070
-  _globals['_SAVECHECKPOINTRESPONSE']._serialized_end=1161
-  _globals['_RECORDEPISODERESULTREQUEST']._serialized_start=1163
-  _globals['_RECORDEPISODERESULTREQUEST']._serialized_end=1252
-  _globals['_RECORDEPISODERESULTRESPONSE']._serialized_start=1255
-  _globals['_RECORDEPISODERESULTRESPONSE']._serialized_end=1412
-  _globals['_LEARNERSERVICE']._serialized_start=1415
-  _globals['_LEARNERSERVICE']._serialized_end=1864
+  _globals['_PREDICTBATCHRESPONSE']._serialized_end=470
+  _globals['_REFLEXPARAMETER']._serialized_start=472
+  _globals['_REFLEXPARAMETER']._serialized_end=580
+  _globals['_TRAINBATCHREQUEST']._serialized_start=582
+  _globals['_TRAINBATCHREQUEST']._serialized_end=669
+  _globals['_TRAINBATCHRESPONSE']._serialized_start=672
+  _globals['_TRAINBATCHRESPONSE']._serialized_end=1013
+  _globals['_HEALTHCHECKREQUEST']._serialized_start=1015
+  _globals['_HEALTHCHECKREQUEST']._serialized_end=1035
+  _globals['_HEALTHCHECKRESPONSE']._serialized_start=1038
+  _globals['_HEALTHCHECKRESPONSE']._serialized_end=1209
+  _globals['_SAVECHECKPOINTREQUEST']._serialized_start=1211
+  _globals['_SAVECHECKPOINTREQUEST']._serialized_end=1234
+  _globals['_SAVECHECKPOINTRESPONSE']._serialized_start=1236
+  _globals['_SAVECHECKPOINTRESPONSE']._serialized_end=1327
+  _globals['_RECORDEPISODERESULTREQUEST']._serialized_start=1329
+  _globals['_RECORDEPISODERESULTREQUEST']._serialized_end=1418
+  _globals['_RECORDEPISODERESULTRESPONSE']._serialized_start=1421
+  _globals['_RECORDEPISODERESULTRESPONSE']._serialized_end=1578
+  _globals['_LEARNERSERVICE']._serialized_start=1581
+  _globals['_LEARNERSERVICE']._serialized_end=2030
 # @@protoc_insertion_point(module_scope)

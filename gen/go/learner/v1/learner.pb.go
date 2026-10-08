@@ -89,8 +89,12 @@ type PredictBatchResponse struct {
 	// three-dimensional command stored in replay and consumed by the critic.
 	FlyBaseActions  []*Action `protobuf:"bytes,3,rep,name=fly_base_actions,json=flyBaseActions,proto3" json:"fly_base_actions,omitempty"`
 	ResidualActions []*Action `protobuf:"bytes,4,rep,name=residual_actions,json=residualActions,proto3" json:"residual_actions,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// Bounded parameters of the active local reflex law. Each `values` entry
+	// aligns with the corresponding request state. This is diagnostic telemetry:
+	// `actions` remains the sole authoritative actuator command.
+	ReflexParameters []*ReflexParameter `protobuf:"bytes,5,rep,name=reflex_parameters,json=reflexParameters,proto3" json:"reflex_parameters,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *PredictBatchResponse) Reset() {
@@ -151,6 +155,89 @@ func (x *PredictBatchResponse) GetResidualActions() []*Action {
 	return nil
 }
 
+func (x *PredictBatchResponse) GetReflexParameters() []*ReflexParameter {
+	if x != nil {
+		return x.ReflexParameters
+	}
+	return nil
+}
+
+type ReflexParameter struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Values        []float32              `protobuf:"fixed32,2,rep,packed,name=values,proto3" json:"values,omitempty"`
+	MinValue      float32                `protobuf:"fixed32,3,opt,name=min_value,json=minValue,proto3" json:"min_value,omitempty"`
+	MaxValue      float32                `protobuf:"fixed32,4,opt,name=max_value,json=maxValue,proto3" json:"max_value,omitempty"`
+	DefaultValue  float32                `protobuf:"fixed32,5,opt,name=default_value,json=defaultValue,proto3" json:"default_value,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReflexParameter) Reset() {
+	*x = ReflexParameter{}
+	mi := &file_learner_v1_learner_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReflexParameter) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReflexParameter) ProtoMessage() {}
+
+func (x *ReflexParameter) ProtoReflect() protoreflect.Message {
+	mi := &file_learner_v1_learner_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReflexParameter.ProtoReflect.Descriptor instead.
+func (*ReflexParameter) Descriptor() ([]byte, []int) {
+	return file_learner_v1_learner_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *ReflexParameter) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *ReflexParameter) GetValues() []float32 {
+	if x != nil {
+		return x.Values
+	}
+	return nil
+}
+
+func (x *ReflexParameter) GetMinValue() float32 {
+	if x != nil {
+		return x.MinValue
+	}
+	return 0
+}
+
+func (x *ReflexParameter) GetMaxValue() float32 {
+	if x != nil {
+		return x.MaxValue
+	}
+	return 0
+}
+
+func (x *ReflexParameter) GetDefaultValue() float32 {
+	if x != nil {
+		return x.DefaultValue
+	}
+	return 0
+}
+
 type TrainBatchRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Batch         *TransitionBatch       `protobuf:"bytes,1,opt,name=batch,proto3" json:"batch,omitempty"`
@@ -161,7 +248,7 @@ type TrainBatchRequest struct {
 
 func (x *TrainBatchRequest) Reset() {
 	*x = TrainBatchRequest{}
-	mi := &file_learner_v1_learner_proto_msgTypes[2]
+	mi := &file_learner_v1_learner_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -173,7 +260,7 @@ func (x *TrainBatchRequest) String() string {
 func (*TrainBatchRequest) ProtoMessage() {}
 
 func (x *TrainBatchRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_learner_v1_learner_proto_msgTypes[2]
+	mi := &file_learner_v1_learner_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -186,7 +273,7 @@ func (x *TrainBatchRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TrainBatchRequest.ProtoReflect.Descriptor instead.
 func (*TrainBatchRequest) Descriptor() ([]byte, []int) {
-	return file_learner_v1_learner_proto_rawDescGZIP(), []int{2}
+	return file_learner_v1_learner_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *TrainBatchRequest) GetBatch() *TransitionBatch {
@@ -225,7 +312,7 @@ type TrainBatchResponse struct {
 
 func (x *TrainBatchResponse) Reset() {
 	*x = TrainBatchResponse{}
-	mi := &file_learner_v1_learner_proto_msgTypes[3]
+	mi := &file_learner_v1_learner_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -237,7 +324,7 @@ func (x *TrainBatchResponse) String() string {
 func (*TrainBatchResponse) ProtoMessage() {}
 
 func (x *TrainBatchResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_learner_v1_learner_proto_msgTypes[3]
+	mi := &file_learner_v1_learner_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -250,7 +337,7 @@ func (x *TrainBatchResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TrainBatchResponse.ProtoReflect.Descriptor instead.
 func (*TrainBatchResponse) Descriptor() ([]byte, []int) {
-	return file_learner_v1_learner_proto_rawDescGZIP(), []int{3}
+	return file_learner_v1_learner_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *TrainBatchResponse) GetAccepted() bool {
@@ -359,7 +446,7 @@ type HealthCheckRequest struct {
 
 func (x *HealthCheckRequest) Reset() {
 	*x = HealthCheckRequest{}
-	mi := &file_learner_v1_learner_proto_msgTypes[4]
+	mi := &file_learner_v1_learner_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -371,7 +458,7 @@ func (x *HealthCheckRequest) String() string {
 func (*HealthCheckRequest) ProtoMessage() {}
 
 func (x *HealthCheckRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_learner_v1_learner_proto_msgTypes[4]
+	mi := &file_learner_v1_learner_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -384,7 +471,7 @@ func (x *HealthCheckRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HealthCheckRequest.ProtoReflect.Descriptor instead.
 func (*HealthCheckRequest) Descriptor() ([]byte, []int) {
-	return file_learner_v1_learner_proto_rawDescGZIP(), []int{4}
+	return file_learner_v1_learner_proto_rawDescGZIP(), []int{5}
 }
 
 type HealthCheckResponse struct {
@@ -407,7 +494,7 @@ type HealthCheckResponse struct {
 
 func (x *HealthCheckResponse) Reset() {
 	*x = HealthCheckResponse{}
-	mi := &file_learner_v1_learner_proto_msgTypes[5]
+	mi := &file_learner_v1_learner_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -419,7 +506,7 @@ func (x *HealthCheckResponse) String() string {
 func (*HealthCheckResponse) ProtoMessage() {}
 
 func (x *HealthCheckResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_learner_v1_learner_proto_msgTypes[5]
+	mi := &file_learner_v1_learner_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -432,7 +519,7 @@ func (x *HealthCheckResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HealthCheckResponse.ProtoReflect.Descriptor instead.
 func (*HealthCheckResponse) Descriptor() ([]byte, []int) {
-	return file_learner_v1_learner_proto_rawDescGZIP(), []int{5}
+	return file_learner_v1_learner_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *HealthCheckResponse) GetReady() bool {
@@ -496,7 +583,7 @@ type SaveCheckpointRequest struct {
 
 func (x *SaveCheckpointRequest) Reset() {
 	*x = SaveCheckpointRequest{}
-	mi := &file_learner_v1_learner_proto_msgTypes[6]
+	mi := &file_learner_v1_learner_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -508,7 +595,7 @@ func (x *SaveCheckpointRequest) String() string {
 func (*SaveCheckpointRequest) ProtoMessage() {}
 
 func (x *SaveCheckpointRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_learner_v1_learner_proto_msgTypes[6]
+	mi := &file_learner_v1_learner_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -521,7 +608,7 @@ func (x *SaveCheckpointRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SaveCheckpointRequest.ProtoReflect.Descriptor instead.
 func (*SaveCheckpointRequest) Descriptor() ([]byte, []int) {
-	return file_learner_v1_learner_proto_rawDescGZIP(), []int{6}
+	return file_learner_v1_learner_proto_rawDescGZIP(), []int{7}
 }
 
 type SaveCheckpointResponse struct {
@@ -535,7 +622,7 @@ type SaveCheckpointResponse struct {
 
 func (x *SaveCheckpointResponse) Reset() {
 	*x = SaveCheckpointResponse{}
-	mi := &file_learner_v1_learner_proto_msgTypes[7]
+	mi := &file_learner_v1_learner_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -547,7 +634,7 @@ func (x *SaveCheckpointResponse) String() string {
 func (*SaveCheckpointResponse) ProtoMessage() {}
 
 func (x *SaveCheckpointResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_learner_v1_learner_proto_msgTypes[7]
+	mi := &file_learner_v1_learner_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -560,7 +647,7 @@ func (x *SaveCheckpointResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SaveCheckpointResponse.ProtoReflect.Descriptor instead.
 func (*SaveCheckpointResponse) Descriptor() ([]byte, []int) {
-	return file_learner_v1_learner_proto_rawDescGZIP(), []int{7}
+	return file_learner_v1_learner_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *SaveCheckpointResponse) GetModelName() string {
@@ -598,7 +685,7 @@ type RecordEpisodeResultRequest struct {
 
 func (x *RecordEpisodeResultRequest) Reset() {
 	*x = RecordEpisodeResultRequest{}
-	mi := &file_learner_v1_learner_proto_msgTypes[8]
+	mi := &file_learner_v1_learner_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -610,7 +697,7 @@ func (x *RecordEpisodeResultRequest) String() string {
 func (*RecordEpisodeResultRequest) ProtoMessage() {}
 
 func (x *RecordEpisodeResultRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_learner_v1_learner_proto_msgTypes[8]
+	mi := &file_learner_v1_learner_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -623,7 +710,7 @@ func (x *RecordEpisodeResultRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RecordEpisodeResultRequest.ProtoReflect.Descriptor instead.
 func (*RecordEpisodeResultRequest) Descriptor() ([]byte, []int) {
-	return file_learner_v1_learner_proto_rawDescGZIP(), []int{8}
+	return file_learner_v1_learner_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *RecordEpisodeResultRequest) GetEpisodeId() string {
@@ -660,7 +747,7 @@ type RecordEpisodeResultResponse struct {
 
 func (x *RecordEpisodeResultResponse) Reset() {
 	*x = RecordEpisodeResultResponse{}
-	mi := &file_learner_v1_learner_proto_msgTypes[9]
+	mi := &file_learner_v1_learner_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -672,7 +759,7 @@ func (x *RecordEpisodeResultResponse) String() string {
 func (*RecordEpisodeResultResponse) ProtoMessage() {}
 
 func (x *RecordEpisodeResultResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_learner_v1_learner_proto_msgTypes[9]
+	mi := &file_learner_v1_learner_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -685,7 +772,7 @@ func (x *RecordEpisodeResultResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RecordEpisodeResultResponse.ProtoReflect.Descriptor instead.
 func (*RecordEpisodeResultResponse) Descriptor() ([]byte, []int) {
-	return file_learner_v1_learner_proto_rawDescGZIP(), []int{9}
+	return file_learner_v1_learner_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *RecordEpisodeResultResponse) GetStopTraining() bool {
@@ -732,12 +819,19 @@ const file_learner_v1_learner_proto_rawDesc = "" +
 	"\x13PredictBatchRequest\x12C\n" +
 	"\venvironment\x18\x01 \x01(\v2!.learner.v1.EnvironmentDescriptorR\venvironment\x12)\n" +
 	"\x06states\x18\x02 \x03(\v2\x11.learner.v1.StateR\x06states\x12%\n" +
-	"\x0epolicy_version\x18\x03 \x01(\x04R\rpolicyVersion\"\xe8\x01\n" +
+	"\x0epolicy_version\x18\x03 \x01(\x04R\rpolicyVersion\"\xb2\x02\n" +
 	"\x14PredictBatchResponse\x12,\n" +
 	"\aactions\x18\x01 \x03(\v2\x12.learner.v1.ActionR\aactions\x12%\n" +
 	"\x0epolicy_version\x18\x02 \x01(\x04R\rpolicyVersion\x12<\n" +
 	"\x10fly_base_actions\x18\x03 \x03(\v2\x12.learner.v1.ActionR\x0eflyBaseActions\x12=\n" +
-	"\x10residual_actions\x18\x04 \x03(\v2\x12.learner.v1.ActionR\x0fresidualActions\"m\n" +
+	"\x10residual_actions\x18\x04 \x03(\v2\x12.learner.v1.ActionR\x0fresidualActions\x12H\n" +
+	"\x11reflex_parameters\x18\x05 \x03(\v2\x1b.learner.v1.ReflexParameterR\x10reflexParameters\"\x9c\x01\n" +
+	"\x0fReflexParameter\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x16\n" +
+	"\x06values\x18\x02 \x03(\x02R\x06values\x12\x1b\n" +
+	"\tmin_value\x18\x03 \x01(\x02R\bminValue\x12\x1b\n" +
+	"\tmax_value\x18\x04 \x01(\x02R\bmaxValue\x12#\n" +
+	"\rdefault_value\x18\x05 \x01(\x02R\fdefaultValue\"m\n" +
 	"\x11TrainBatchRequest\x121\n" +
 	"\x05batch\x18\x01 \x01(\v2\x1b.learner.v1.TransitionBatchR\x05batch\x12%\n" +
 	"\x0epolicy_version\x18\x02 \x01(\x04R\rpolicyVersion\"\x93\x04\n" +
@@ -809,45 +903,47 @@ func file_learner_v1_learner_proto_rawDescGZIP() []byte {
 	return file_learner_v1_learner_proto_rawDescData
 }
 
-var file_learner_v1_learner_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
+var file_learner_v1_learner_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
 var file_learner_v1_learner_proto_goTypes = []any{
 	(*PredictBatchRequest)(nil),         // 0: learner.v1.PredictBatchRequest
 	(*PredictBatchResponse)(nil),        // 1: learner.v1.PredictBatchResponse
-	(*TrainBatchRequest)(nil),           // 2: learner.v1.TrainBatchRequest
-	(*TrainBatchResponse)(nil),          // 3: learner.v1.TrainBatchResponse
-	(*HealthCheckRequest)(nil),          // 4: learner.v1.HealthCheckRequest
-	(*HealthCheckResponse)(nil),         // 5: learner.v1.HealthCheckResponse
-	(*SaveCheckpointRequest)(nil),       // 6: learner.v1.SaveCheckpointRequest
-	(*SaveCheckpointResponse)(nil),      // 7: learner.v1.SaveCheckpointResponse
-	(*RecordEpisodeResultRequest)(nil),  // 8: learner.v1.RecordEpisodeResultRequest
-	(*RecordEpisodeResultResponse)(nil), // 9: learner.v1.RecordEpisodeResultResponse
-	(*EnvironmentDescriptor)(nil),       // 10: learner.v1.EnvironmentDescriptor
-	(*State)(nil),                       // 11: learner.v1.State
-	(*Action)(nil),                      // 12: learner.v1.Action
-	(*TransitionBatch)(nil),             // 13: learner.v1.TransitionBatch
+	(*ReflexParameter)(nil),             // 2: learner.v1.ReflexParameter
+	(*TrainBatchRequest)(nil),           // 3: learner.v1.TrainBatchRequest
+	(*TrainBatchResponse)(nil),          // 4: learner.v1.TrainBatchResponse
+	(*HealthCheckRequest)(nil),          // 5: learner.v1.HealthCheckRequest
+	(*HealthCheckResponse)(nil),         // 6: learner.v1.HealthCheckResponse
+	(*SaveCheckpointRequest)(nil),       // 7: learner.v1.SaveCheckpointRequest
+	(*SaveCheckpointResponse)(nil),      // 8: learner.v1.SaveCheckpointResponse
+	(*RecordEpisodeResultRequest)(nil),  // 9: learner.v1.RecordEpisodeResultRequest
+	(*RecordEpisodeResultResponse)(nil), // 10: learner.v1.RecordEpisodeResultResponse
+	(*EnvironmentDescriptor)(nil),       // 11: learner.v1.EnvironmentDescriptor
+	(*State)(nil),                       // 12: learner.v1.State
+	(*Action)(nil),                      // 13: learner.v1.Action
+	(*TransitionBatch)(nil),             // 14: learner.v1.TransitionBatch
 }
 var file_learner_v1_learner_proto_depIdxs = []int32{
-	10, // 0: learner.v1.PredictBatchRequest.environment:type_name -> learner.v1.EnvironmentDescriptor
-	11, // 1: learner.v1.PredictBatchRequest.states:type_name -> learner.v1.State
-	12, // 2: learner.v1.PredictBatchResponse.actions:type_name -> learner.v1.Action
-	12, // 3: learner.v1.PredictBatchResponse.fly_base_actions:type_name -> learner.v1.Action
-	12, // 4: learner.v1.PredictBatchResponse.residual_actions:type_name -> learner.v1.Action
-	13, // 5: learner.v1.TrainBatchRequest.batch:type_name -> learner.v1.TransitionBatch
-	0,  // 6: learner.v1.LearnerService.PredictBatch:input_type -> learner.v1.PredictBatchRequest
-	2,  // 7: learner.v1.LearnerService.TrainBatch:input_type -> learner.v1.TrainBatchRequest
-	4,  // 8: learner.v1.LearnerService.HealthCheck:input_type -> learner.v1.HealthCheckRequest
-	6,  // 9: learner.v1.LearnerService.SaveCheckpoint:input_type -> learner.v1.SaveCheckpointRequest
-	8,  // 10: learner.v1.LearnerService.RecordEpisodeResult:input_type -> learner.v1.RecordEpisodeResultRequest
-	1,  // 11: learner.v1.LearnerService.PredictBatch:output_type -> learner.v1.PredictBatchResponse
-	3,  // 12: learner.v1.LearnerService.TrainBatch:output_type -> learner.v1.TrainBatchResponse
-	5,  // 13: learner.v1.LearnerService.HealthCheck:output_type -> learner.v1.HealthCheckResponse
-	7,  // 14: learner.v1.LearnerService.SaveCheckpoint:output_type -> learner.v1.SaveCheckpointResponse
-	9,  // 15: learner.v1.LearnerService.RecordEpisodeResult:output_type -> learner.v1.RecordEpisodeResultResponse
-	11, // [11:16] is the sub-list for method output_type
-	6,  // [6:11] is the sub-list for method input_type
-	6,  // [6:6] is the sub-list for extension type_name
-	6,  // [6:6] is the sub-list for extension extendee
-	0,  // [0:6] is the sub-list for field type_name
+	11, // 0: learner.v1.PredictBatchRequest.environment:type_name -> learner.v1.EnvironmentDescriptor
+	12, // 1: learner.v1.PredictBatchRequest.states:type_name -> learner.v1.State
+	13, // 2: learner.v1.PredictBatchResponse.actions:type_name -> learner.v1.Action
+	13, // 3: learner.v1.PredictBatchResponse.fly_base_actions:type_name -> learner.v1.Action
+	13, // 4: learner.v1.PredictBatchResponse.residual_actions:type_name -> learner.v1.Action
+	2,  // 5: learner.v1.PredictBatchResponse.reflex_parameters:type_name -> learner.v1.ReflexParameter
+	14, // 6: learner.v1.TrainBatchRequest.batch:type_name -> learner.v1.TransitionBatch
+	0,  // 7: learner.v1.LearnerService.PredictBatch:input_type -> learner.v1.PredictBatchRequest
+	3,  // 8: learner.v1.LearnerService.TrainBatch:input_type -> learner.v1.TrainBatchRequest
+	5,  // 9: learner.v1.LearnerService.HealthCheck:input_type -> learner.v1.HealthCheckRequest
+	7,  // 10: learner.v1.LearnerService.SaveCheckpoint:input_type -> learner.v1.SaveCheckpointRequest
+	9,  // 11: learner.v1.LearnerService.RecordEpisodeResult:input_type -> learner.v1.RecordEpisodeResultRequest
+	1,  // 12: learner.v1.LearnerService.PredictBatch:output_type -> learner.v1.PredictBatchResponse
+	4,  // 13: learner.v1.LearnerService.TrainBatch:output_type -> learner.v1.TrainBatchResponse
+	6,  // 14: learner.v1.LearnerService.HealthCheck:output_type -> learner.v1.HealthCheckResponse
+	8,  // 15: learner.v1.LearnerService.SaveCheckpoint:output_type -> learner.v1.SaveCheckpointResponse
+	10, // 16: learner.v1.LearnerService.RecordEpisodeResult:output_type -> learner.v1.RecordEpisodeResultResponse
+	12, // [12:17] is the sub-list for method output_type
+	7,  // [7:12] is the sub-list for method input_type
+	7,  // [7:7] is the sub-list for extension type_name
+	7,  // [7:7] is the sub-list for extension extendee
+	0,  // [0:7] is the sub-list for field type_name
 }
 
 func init() { file_learner_v1_learner_proto_init() }
@@ -863,7 +959,7 @@ func file_learner_v1_learner_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_learner_v1_learner_proto_rawDesc), len(file_learner_v1_learner_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   10,
+			NumMessages:   11,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

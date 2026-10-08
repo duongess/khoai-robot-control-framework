@@ -19,16 +19,32 @@ class PredictBatchRequest(_message.Message):
     def __init__(self, environment: _Optional[_Union[_environment_pb2.EnvironmentDescriptor, _Mapping]] = ..., states: _Optional[_Iterable[_Union[_environment_pb2.State, _Mapping]]] = ..., policy_version: _Optional[int] = ...) -> None: ...
 
 class PredictBatchResponse(_message.Message):
-    __slots__ = ("actions", "policy_version", "fly_base_actions", "residual_actions")
+    __slots__ = ("actions", "policy_version", "fly_base_actions", "residual_actions", "reflex_parameters")
     ACTIONS_FIELD_NUMBER: _ClassVar[int]
     POLICY_VERSION_FIELD_NUMBER: _ClassVar[int]
     FLY_BASE_ACTIONS_FIELD_NUMBER: _ClassVar[int]
     RESIDUAL_ACTIONS_FIELD_NUMBER: _ClassVar[int]
+    REFLEX_PARAMETERS_FIELD_NUMBER: _ClassVar[int]
     actions: _containers.RepeatedCompositeFieldContainer[_environment_pb2.Action]
     policy_version: int
     fly_base_actions: _containers.RepeatedCompositeFieldContainer[_environment_pb2.Action]
     residual_actions: _containers.RepeatedCompositeFieldContainer[_environment_pb2.Action]
-    def __init__(self, actions: _Optional[_Iterable[_Union[_environment_pb2.Action, _Mapping]]] = ..., policy_version: _Optional[int] = ..., fly_base_actions: _Optional[_Iterable[_Union[_environment_pb2.Action, _Mapping]]] = ..., residual_actions: _Optional[_Iterable[_Union[_environment_pb2.Action, _Mapping]]] = ...) -> None: ...
+    reflex_parameters: _containers.RepeatedCompositeFieldContainer[ReflexParameter]
+    def __init__(self, actions: _Optional[_Iterable[_Union[_environment_pb2.Action, _Mapping]]] = ..., policy_version: _Optional[int] = ..., fly_base_actions: _Optional[_Iterable[_Union[_environment_pb2.Action, _Mapping]]] = ..., residual_actions: _Optional[_Iterable[_Union[_environment_pb2.Action, _Mapping]]] = ..., reflex_parameters: _Optional[_Iterable[_Union[ReflexParameter, _Mapping]]] = ...) -> None: ...
+
+class ReflexParameter(_message.Message):
+    __slots__ = ("name", "values", "min_value", "max_value", "default_value")
+    NAME_FIELD_NUMBER: _ClassVar[int]
+    VALUES_FIELD_NUMBER: _ClassVar[int]
+    MIN_VALUE_FIELD_NUMBER: _ClassVar[int]
+    MAX_VALUE_FIELD_NUMBER: _ClassVar[int]
+    DEFAULT_VALUE_FIELD_NUMBER: _ClassVar[int]
+    name: str
+    values: _containers.RepeatedScalarFieldContainer[float]
+    min_value: float
+    max_value: float
+    default_value: float
+    def __init__(self, name: _Optional[str] = ..., values: _Optional[_Iterable[float]] = ..., min_value: _Optional[float] = ..., max_value: _Optional[float] = ..., default_value: _Optional[float] = ...) -> None: ...
 
 class TrainBatchRequest(_message.Message):
     __slots__ = ("batch", "policy_version")

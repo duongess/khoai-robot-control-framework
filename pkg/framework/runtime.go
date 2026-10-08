@@ -39,6 +39,7 @@ type runtimeWorker struct {
 	lastInfo             map[string]float32
 	outcome              Outcome
 	actionSource         string
+	reflexParameters     []ReflexParameterValue
 }
 
 const rollingSuccessWindowEpisodes = 1000
@@ -97,18 +98,29 @@ type ActionStatistics struct {
 }
 
 type WorkerSnapshot struct {
-	ID            int                `json:"id"`
-	EpisodeID     uint64             `json:"episode_id"`
-	EpisodeStep   uint64             `json:"episode_step"`
-	State         State              `json:"state"`
-	LastAction    Action             `json:"last_action"`
-	LastReward    float32            `json:"last_reward"`
-	EpisodeReward float64            `json:"episode_reward"`
-	PolicyVersion uint64             `json:"policy_version"`
-	Info          map[string]float32 `json:"info,omitempty"`
-	Outcome       Outcome            `json:"outcome"`
-	ActionSource  string             `json:"action_source"`
-	Metadata      map[string]any     `json:"metadata,omitempty"`
+	ID               int                    `json:"id"`
+	EpisodeID        uint64                 `json:"episode_id"`
+	EpisodeStep      uint64                 `json:"episode_step"`
+	State            State                  `json:"state"`
+	LastAction       Action                 `json:"last_action"`
+	LastReward       float32                `json:"last_reward"`
+	EpisodeReward    float64                `json:"episode_reward"`
+	PolicyVersion    uint64                 `json:"policy_version"`
+	Info             map[string]float32     `json:"info,omitempty"`
+	Outcome          Outcome                `json:"outcome"`
+	ActionSource     string                 `json:"action_source"`
+	ReflexParameters []ReflexParameterValue `json:"reflex_parameters,omitempty"`
+	Metadata         map[string]any         `json:"metadata,omitempty"`
+}
+
+// ReflexParameterValue is one selected worker's bounded theta coefficient.
+// It is telemetry only; LastAction remains the command applied to the task.
+type ReflexParameterValue struct {
+	Name         string  `json:"name"`
+	Value        float32 `json:"value"`
+	MinValue     float32 `json:"min_value"`
+	MaxValue     float32 `json:"max_value"`
+	DefaultValue float32 `json:"default_value"`
 }
 
 type RuntimeSnapshot struct {
@@ -287,10 +299,11 @@ func (r *Runtime) cycle(ctx context.Context, descriptor TaskDescriptor) {
 	r.mu.Unlock()
 
 	type indexedPrediction struct {
-		action   Action
-		flyBase  Action
-		residual Action
-		version  uint64
+		action           Action
+		flyBase          Action
+		residual         Action
+		reflexParameters []ReflexParameterValue
+		version          uint64
 	}
 	predictions := make(map[int]indexedPrediction, len(r.workers))
 	if useRandomWarmup {
@@ -339,6 +352,15 @@ func (r *Runtime) cycle(ctx context.Context, descriptor TaskDescriptor) {
 			}
 			if len(prediction.ResidualActions) == len(states) {
 				item.residual = prediction.ResidualActions[position]
+			}
+			if len(prediction.ReflexParameters) > 0 {
+				item.reflexParameters = make([]ReflexParameterValue, len(prediction.ReflexParameters))
+				for parameterIndex, parameter := range prediction.ReflexParameters {
+					item.reflexParameters[parameterIndex] = ReflexParameterValue{
+						Name: parameter.Name, Value: parameter.Values[position], MinValue: parameter.MinValue,
+						MaxValue: parameter.MaxValue, DefaultValue: parameter.DefaultValue,
+					}
+				}
 			}
 			predictions[index] = item
 		}
@@ -416,6 +438,7 @@ func (r *Runtime) cycle(ctx context.Context, descriptor TaskDescriptor) {
 			worker.actionSource = "random_warmup"
 		}
 		worker.lastAction, worker.lastReward, worker.lastInfo, worker.outcome = append(Action(nil), action...), result.Reward, cloneInfo(result.Info), result.Outcome
+		worker.reflexParameters = append([]ReflexParameterValue(nil), prediction.reflexParameters...)
 		r.recordAction(action, result.Info)
 		if phase, ok := result.Info["phase_numeric"]; ok {
 			r.metrics.phaseCounts[int(phase)]++
@@ -516,6 +539,7 @@ func (r *Runtime) restartWorkersAfterSnapshotEviction(indexes []int, evictedVers
 		worker.episodeID++
 		worker.episodeStep = 0
 		worker.lastAction = nil
+		worker.reflexParameters = nil
 		worker.lastReward = 0
 		worker.episodeReward = 0
 		worker.episodePolicyVersion = 0
@@ -584,8 +608,14 @@ func (r *Runtime) train(ctx context.Context, transitions []Transition) {
 	if !result.Accepted {
 		return
 	}
-	r.metrics.trainingBatches++
+	// The learner's training_step is the authoritative count of completed
+	// gradient updates. Evaluation-mode learners may acknowledge TrainBatch
+	// requests without updating weights, so counting Accepted responses would
+	// falsely report training activity.
 	r.metrics.policyVersion, r.metrics.trainingStep = result.PolicyVersion, result.TrainingStep
+	if result.TrainingStep > r.metrics.trainingBatches {
+		r.metrics.trainingBatches = result.TrainingStep
+	}
 	r.metrics.actorLoss, r.metrics.criticLoss, r.metrics.alphaLoss, r.metrics.entropy = result.ActorLoss, result.CriticLoss, result.AlphaLoss, result.Entropy
 	r.metrics.criticOneQ, r.metrics.criticTwoQ, r.metrics.alpha = result.CriticOneQ, result.CriticTwoQ, result.Alpha
 	r.metrics.actorLogStdHorizontal, r.metrics.actorLogStdVertical, r.metrics.actorLogStdGripper = result.ActorLogStdHorizontal, result.ActorLogStdVertical, result.ActorLogStdGripper
@@ -651,6 +681,7 @@ func (r *Runtime) resetWorker(worker *runtimeWorker) error {
 	worker.episodeReward = 0
 	worker.episodePolicyVersion = 0
 	worker.lastAction = nil
+	worker.reflexParameters = nil
 	worker.lastReward = 0
 	worker.lastInfo = nil
 	worker.outcome = OutcomeRunning
@@ -759,7 +790,7 @@ func (r *Runtime) Snapshot() RuntimeSnapshot {
 		if telemetryTask, ok := worker.task.(TelemetryTask); ok {
 			metadata = telemetryTask.TelemetryMetadata()
 		}
-		snapshot.Workers[i] = WorkerSnapshot{ID: worker.id, EpisodeID: worker.episodeID, EpisodeStep: worker.episodeStep, State: append(State(nil), worker.state...), LastAction: append(Action(nil), worker.lastAction...), LastReward: worker.lastReward, EpisodeReward: worker.episodeReward, PolicyVersion: worker.episodePolicyVersion, Info: cloneInfo(worker.lastInfo), Outcome: worker.outcome, ActionSource: worker.actionSource, Metadata: metadata}
+		snapshot.Workers[i] = WorkerSnapshot{ID: worker.id, EpisodeID: worker.episodeID, EpisodeStep: worker.episodeStep, State: append(State(nil), worker.state...), LastAction: append(Action(nil), worker.lastAction...), LastReward: worker.lastReward, EpisodeReward: worker.episodeReward, PolicyVersion: worker.episodePolicyVersion, Info: cloneInfo(worker.lastInfo), Outcome: worker.outcome, ActionSource: worker.actionSource, ReflexParameters: append([]ReflexParameterValue(nil), worker.reflexParameters...), Metadata: metadata}
 	}
 	return snapshot
 }

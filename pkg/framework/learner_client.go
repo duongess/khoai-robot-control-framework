@@ -62,10 +62,21 @@ type HealthStatus struct {
 }
 
 type PredictionResult struct {
-	Actions         []Action
-	FlyBaseActions  []Action
-	ResidualActions []Action
-	PolicyVersion   uint64
+	Actions          []Action
+	FlyBaseActions   []Action
+	ResidualActions  []Action
+	ReflexParameters []ReflexParameter
+	PolicyVersion    uint64
+}
+
+// ReflexParameter is read-only diagnostic data for one bounded f(x; theta)
+// coefficient. Values align with the states supplied to PredictBatch.
+type ReflexParameter struct {
+	Name         string
+	Values       []float32
+	MinValue     float32
+	MaxValue     float32
+	DefaultValue float32
 }
 
 type TrainingResult struct {
@@ -218,7 +229,25 @@ func (c *LearnerClient) PredictBatch(ctx context.Context, states []State, policy
 	if err != nil {
 		return PredictionResult{}, err
 	}
-	return PredictionResult{Actions: actions, FlyBaseActions: flyBaseActions, ResidualActions: residualActions, PolicyVersion: response.GetPolicyVersion()}, nil
+	reflexParameters := make([]ReflexParameter, 0, len(response.GetReflexParameters()))
+	for index, parameter := range response.GetReflexParameters() {
+		if parameter.GetName() == "" {
+			return PredictionResult{}, fmt.Errorf("predict batch reflex parameter %d has an empty name", index)
+		}
+		values := parameter.GetValues()
+		if len(values) != len(states) {
+			return PredictionResult{}, fmt.Errorf("predict batch reflex parameter %q returned %d values for %d states", parameter.GetName(), len(values), len(states))
+		}
+		allValues := append(append([]float32(nil), values...), parameter.GetMinValue(), parameter.GetMaxValue(), parameter.GetDefaultValue())
+		if err := validateFinite("reflex parameter "+parameter.GetName(), allValues); err != nil {
+			return PredictionResult{}, err
+		}
+		reflexParameters = append(reflexParameters, ReflexParameter{
+			Name: parameter.GetName(), Values: append([]float32(nil), values...),
+			MinValue: parameter.GetMinValue(), MaxValue: parameter.GetMaxValue(), DefaultValue: parameter.GetDefaultValue(),
+		})
+	}
+	return PredictionResult{Actions: actions, FlyBaseActions: flyBaseActions, ResidualActions: residualActions, ReflexParameters: reflexParameters, PolicyVersion: response.GetPolicyVersion()}, nil
 }
 
 func (c *LearnerClient) TrainBatch(ctx context.Context, transitions []Transition) (TrainingResult, error) {

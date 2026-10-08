@@ -95,3 +95,16 @@ def test_dense_parametric_learner_forwards_all_six_coefficients_without_zero_fal
     assert response.residual_actions[0].values[1] < 0
     assert response.residual_actions[0].values[2] > 0
     assert list(response.actions[0].values) == pytest.approx(list(response.residual_actions[0].values))
+
+    # Coefficient telemetry is intentionally refreshed on the server's
+    # diagnostic cadence, so no second actor forward is paid on this control
+    # request. Force that cadence for the display-path contract.
+    servicer._predict_requests = servicer._config.log_every_n_requests - 1
+    telemetry = servicer.PredictBatch(
+        learner_pb2.PredictBatchRequest(states=[environment_pb2.State(values=state[0].tolist())]),
+        AbortContext(),
+    )
+    assert [parameter.name for parameter in telemetry.reflex_parameters] == [
+        "channel_0.a", "channel_0.b", "channel_1.a", "channel_1.b", "channel_2.a", "channel_2.b",
+    ]
+    assert all(len(parameter.values) == 1 for parameter in telemetry.reflex_parameters)

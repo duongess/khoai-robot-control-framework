@@ -20,6 +20,18 @@ message PredictBatchResponse {
   // three-dimensional command stored in replay and consumed by the critic.
   repeated Action fly_base_actions = 3;
   repeated Action residual_actions = 4;
+  // Bounded parameters of the active local reflex law. Each `values` entry
+  // aligns with the corresponding request state. This is diagnostic telemetry:
+  // `actions` remains the sole authoritative actuator command.
+  repeated ReflexParameter reflex_parameters = 5;
+}
+
+message ReflexParameter {
+  string name = 1;
+  repeated float values = 2;
+  float min_value = 3;
+  float max_value = 4;
+  float default_value = 5;
 }
 
 message TrainBatchRequest {

@@ -191,6 +191,10 @@ class LearnerServicer(learner_pb2_grpc.LearnerServiceServicer):
         self._training_lock = threading.Lock()
         self._training_step = 0
         self._predict_requests = 0
+        # Computing bounded theta telemetry currently invokes the actor's
+        # parameter head. Keep it out of the 99% control path and refresh it
+        # together with the existing diagnostic actor pass instead.
+        self._reflex_parameter_telemetry: dict[tuple[int, int], list[dict]] = {}
         self._train_requests = 0
         self._episode_results = deque(maxlen=SUCCESS_WINDOW_EPISODES)
         self._reported_episode_ids: set[str] = set()
@@ -267,11 +271,30 @@ class LearnerServicer(learner_pb2_grpc.LearnerServiceServicer):
                 # not pay for a second actor pass on ordinary control requests.
                 if should_log:
                     mean, log_std = actor(states)
+                export_reflex_telemetry = getattr(actor, "export_reflex_parameter_telemetry", None)
+                if export_reflex_telemetry is not None and should_log:
+                    if len(self._reflex_parameter_telemetry) >= 32:
+                        self._reflex_parameter_telemetry.clear()
+                    self._reflex_parameter_telemetry[(served_version, len(request.states))] = export_reflex_telemetry(states)
         except ValueError as error:
             context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(error))
         actions = [environment_pb2.Action(values=[float(value) for value in action]) for action in predicted_actions]
         fly_base = [environment_pb2.Action(values=[float(value) for value in action]) for action in fly_base_actions]
         residuals = [environment_pb2.Action(values=[float(value) for value in action]) for action in residual_actions]
+        # A cache entry is valid only for the exact immutable actor snapshot
+        # and batch cardinality that produced it. This prevents diagnostic
+        # theta data from ever being paired with another worker's state.
+        cached_reflex_parameters = self._reflex_parameter_telemetry.get((served_version, len(request.states)), [])
+        reflex_parameters = [
+            learner_pb2.ReflexParameter(
+                name=str(parameter["name"]),
+                values=[float(value) for value in parameter["values"]],
+                min_value=float(parameter["min_val"]),
+                max_value=float(parameter["max_val"]),
+                default_value=float(parameter["default"]),
+            )
+            for parameter in cached_reflex_parameters
+        ]
         if should_log:
             LOGGER.info("predict_batch", extra={"fields": {
                 "states": len(request.states),
@@ -290,6 +313,7 @@ class LearnerServicer(learner_pb2_grpc.LearnerServiceServicer):
             policy_version=served_version,
             fly_base_actions=fly_base,
             residual_actions=residuals,
+            reflex_parameters=reflex_parameters,
         )
 
     def TrainBatch(self, request, context):
