@@ -71,20 +71,21 @@ class SACConfig:
             raise ValueError("action dimension must be positive")
         if not 0 < self.gamma < 1:
             raise ValueError("gamma must be in (0, 1)")
-        if self.controller_type not in {"mlp", "fly_connectome", "random_graph"}:
-            raise ValueError("controller_type must be mlp, fly_connectome, or random_graph")
+        if self.controller_type not in {"mlp", "parametric_mlp", "fly_connectome", "random_graph"}:
+            raise ValueError("controller_type must be mlp, parametric_mlp, fly_connectome, or random_graph")
         if self.base_policy not in {"connectome", "closed_loop"}:
             raise ValueError("base_policy must be connectome or closed_loop")
-        if self.controller_type != "mlp" and not self.graph_path:
+        graph_controller = self.controller_type in {"fly_connectome", "random_graph"}
+        if graph_controller and not self.graph_path:
             raise ValueError("graph_path is required for graph controllers")
-        if self.graph_path and self.controller_type != "mlp" and not Path(self.graph_path).is_file():
+        if self.graph_path and graph_controller and not Path(self.graph_path).is_file():
             raise ValueError(f"connectome graph does not exist: {self.graph_path}")
         if not self.freeze_topology:
             raise ValueError("freeze_topology must remain true; creating graph edges is unsupported")
         if self.full_actor_unlock_step < 0:
             raise ValueError("full_actor_unlock_step must be non-negative")
         if self.phase_gated_decoder:
-            if self.controller_type == "mlp":
+            if not graph_controller:
                 raise ValueError("phase_gated_decoder requires a graph controller")
             indices = (self.object_attached_observation_index, self.phase_observation_index)
             if any(index < 0 or index >= self.state_dim for index in indices):
@@ -107,7 +108,7 @@ class SACConfig:
             self.vertical_acceleration_observation_index,
             self.previous_vertical_action_observation_index,
         )
-        if self.controller_type != "mlp" and any(index < -1 or index >= self.state_dim for index in tactile_indices):
+        if graph_controller and any(index < -1 or index >= self.state_dim for index in tactile_indices):
             raise ValueError("dual-loop tactile observation indices must be -1 or within state_dim")
 
 
@@ -147,6 +148,7 @@ class LearnerConfig:
     # At the fixed 0.1 s control period, 0.999 keeps meaningful credit for a
     # 30 s secure hold and its possible later safety failure.
     gamma: float = 0.999
+    eval_mode: bool = False
     deterministic_inference: bool = False
     # Keep the local learner responsive on development machines. These values
     # control PyTorch compute threads, not the number of simulated workers.
@@ -175,6 +177,8 @@ class LearnerConfig:
             raise ValueError("log_every_n_requests must be positive")
         if not self.checkpoint_dir.strip():
             raise ValueError("checkpoint_dir must not be empty")
+        if self.controller_type not in {"mlp", "parametric_mlp", "fly_connectome", "random_graph"}:
+            raise ValueError("controller_type must be mlp, parametric_mlp, fly_connectome, or random_graph")
         if self.base_policy not in {"connectome", "closed_loop"}:
             raise ValueError("base_policy must be connectome or closed_loop")
         if self.full_actor_unlock_step < 0:
@@ -191,10 +195,11 @@ class LearnerConfig:
             self.vertical_acceleration_observation_index,
             self.previous_vertical_action_observation_index,
         )
-        if self.controller_type != "mlp" and any(index < 0 or index >= self.state_dim for index in tactile_indices):
+        graph_controller = self.controller_type in {"fly_connectome", "random_graph"}
+        if graph_controller and any(index < 0 or index >= self.state_dim for index in tactile_indices):
             raise ValueError("dual-loop tactile observation indices must be within state_dim")
         if self.phase_gated_decoder:
-            if self.controller_type == "mlp":
+            if not graph_controller:
                 raise ValueError("phase_gated_decoder requires a graph controller")
             indices = (self.object_attached_observation_index, self.phase_observation_index)
             if any(index < 0 or index >= self.state_dim for index in indices):
@@ -205,22 +210,26 @@ class LearnerConfig:
                 raise ValueError("transport_phase_threshold must be finite")
 
     @classmethod
-    def from_environment(cls) -> "LearnerConfig":
+    def from_environment(cls, *, controller_type_override: str | None = None) -> "LearnerConfig":
         try:
             graph_path = os.environ.get("LEARNER_GRAPH_PATH")
-            controller_type = os.environ.get("LEARNER_CONTROLLER", "mlp")
+            controller_type = controller_type_override or os.environ.get("LEARNER_CONTROLLER", "mlp")
+            graph_controller = controller_type in {"fly_connectome", "random_graph"}
             default_phase_gating = "true" if controller_type in {"fly_connectome", "random_graph"} else "false"
+            # A CLI architecture selection must not be invalidated by an old
+            # exported phase-gating variable from a previous graph run.
+            phase_gated_decoder = graph_controller if controller_type_override is not None else os.environ.get("LEARNER_PHASE_GATED_DECODER", default_phase_gating).lower() == "true"
             return cls(
                 state_dim=int(os.environ.get("LEARNER_STATE_DIM", "30")),
                 action_dim=int(os.environ.get("LEARNER_ACTION_DIM", "3")),
                 controller_type=controller_type,
-                base_policy=os.environ.get("LEARNER_BASE_POLICY", "connectome" if controller_type in {"fly_connectome", "random_graph"} else "closed_loop"),
+                base_policy=os.environ.get("LEARNER_BASE_POLICY", "connectome" if graph_controller else "closed_loop"),
                 graph_path=graph_path,
                 propagation_steps=int(os.environ.get("LEARNER_PROPAGATION_STEPS", "4")),
                 train_edge_gains=os.environ.get("LEARNER_TRAIN_EDGE_GAINS", "true").lower() == "true",
                 freeze_topology=os.environ.get("LEARNER_FREEZE_TOPOLOGY", "true").lower() == "true",
                 full_actor_unlock_step=int(os.environ.get("LEARNER_FULL_ACTOR_UNLOCK_STEP", "128")),
-                phase_gated_decoder=os.environ.get("LEARNER_PHASE_GATED_DECODER", default_phase_gating).lower() == "true",
+                phase_gated_decoder=phase_gated_decoder,
                 object_attached_observation_index=int(os.environ.get("LEARNER_OBJECT_ATTACHED_OBSERVATION_INDEX", "15")),
                 phase_observation_index=int(os.environ.get("LEARNER_PHASE_OBSERVATION_INDEX", "19")),
                 transport_phase_threshold=float(os.environ.get("LEARNER_TRANSPORT_PHASE_THRESHOLD", "0.0")),
@@ -240,6 +249,7 @@ class LearnerConfig:
                 vertical_acceleration_observation_index=int(os.environ.get("LEARNER_VERTICAL_ACCELERATION_OBSERVATION_INDEX", "18")),
                 previous_vertical_action_observation_index=int(os.environ.get("LEARNER_PREVIOUS_VERTICAL_ACTION_OBSERVATION_INDEX", "26")),
                 gamma=float(os.environ.get("LEARNER_GAMMA", "0.999")),
+                eval_mode=os.environ.get("LEARNER_EVAL_MODE", "false").lower() == "true",
                 deterministic_inference=os.environ.get("LEARNER_DETERMINISTIC_INFERENCE", "false").lower() == "true",
                 torch_num_threads=int(os.environ.get("LEARNER_TORCH_NUM_THREADS", "1")),
                 torch_num_interop_threads=int(os.environ.get("LEARNER_TORCH_NUM_INTEROP_THREADS", "1")),

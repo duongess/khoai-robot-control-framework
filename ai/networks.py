@@ -39,6 +39,46 @@ class GaussianActor(nn.Module):
         return action, log_probability.sum(dim=-1, keepdim=True)
 
 
+class ParametricMLPPolicy(nn.Module):
+    """Dense context encoder for SAC policies whose actions are reflex parameters.
+
+    The dynamic-reflex integration attaches the bounded parameter head and
+    evaluates ``f(x; theta)``. Unlike :class:`GaussianActor`, this policy never
+    substitutes a three-value motor vector for the six-value compliance vector.
+    """
+
+    # Go's pure_rl mode consumes the residual protocol stream. The value in that
+    # stream is the complete evaluated reflex action, not a zero correction.
+    parametric_action_stream = "residual"
+
+    def __init__(self, state_dim: int, action_dim: int, hidden_dim: int, min_log_std: float = -3.0) -> None:
+        super().__init__()
+        if state_dim <= 0 or action_dim <= 0 or hidden_dim <= 0:
+            raise ValueError("state, action, and hidden dimensions must be positive")
+        self.observation_dim = state_dim
+        self.action_dim = action_dim
+        self.context_dim = hidden_dim
+        self.min_log_std = min_log_std
+        self.backbone = nn.Sequential(
+            nn.Linear(state_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+        )
+        self.parameter_head: nn.Linear | None = None
+        self.parameter_log_std: nn.Parameter | None = None
+        self.register_buffer("reflex_parameter_min", torch.empty(0))
+        self.register_buffer("reflex_parameter_max", torch.empty(0))
+        self._dynamic_reflex_registry = None
+
+    def _policy_context(self, observation: torch.Tensor) -> torch.Tensor:
+        if observation.ndim != 2 or observation.shape[1] != self.observation_dim:
+            raise ValueError(f"observation must have shape (batch, {self.observation_dim})")
+        if not torch.isfinite(observation).all():
+            raise ValueError("observation must contain finite values")
+        return self.backbone(observation)
+
+
 class Critic(nn.Module):
     """A state-action value estimator."""
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import torch
 
-from ai.connectome.dynamic_policy import DEFAULT_GANTRY_REFLEX_CONFIG
+from ai.connectome.dynamic_policy import DEFAULT_GANTRY_REFLEX_CONFIG, _apply_gantry_task_flow
 from ai.connectome.policy import FlyConnectomePolicy
 from ai.test_connectome import _graph
 
@@ -73,7 +73,7 @@ def test_default_gantry_task_flow_lifts_carries_and_releases(tmp_path) -> None:
     assert action[0, 1] > 0 and action[0, 2] > 0
     assert action[1, 0] > 0 and action[1, 1] < 0 and action[1, 2] > 0
     assert action[2, 0] > 0 and action[2, 1] <= -0.5 and action[2, 2] > 0
-    assert action[3, 1] < 0 and action[3, 2] < 0
+    assert action[3, 1] < 0 and action[3, 2] <= -0.85
 
 
 def test_phase_routing_keeps_action_on_engine_gradient_path(tmp_path) -> None:
@@ -93,9 +93,26 @@ def test_approach_gate_descends_only_when_horizontally_aligned(tmp_path) -> None
     policy.register_default_gantry_reflex_law()
     state = torch.zeros((2, 30))
     state[0, 10], state[0, 11] = -0.40, 0.50  # far left of object
-    state[1, 10], state[1, 11] = -0.05, 0.50  # within the 10cm gate
+    state[1, 10], state[1, 11] = -0.01, 0.50  # 6 cm, inside the 15 cm gate
 
     action, _, _, _ = policy.sample_decomposed(state, deterministic=True)
 
     assert action[0, 0] > 0 and torch.allclose(action[0, 1], torch.tensor(0.0))
     assert action[1, 0] > 0 and action[1, 1] < 0
+
+
+def test_approach_gain_clears_deadband_up_to_descent_gate() -> None:
+    observation = torch.zeros((4, 30))
+    observation[:, 10] = torch.tensor([-0.15, -0.025, 0.025, 0.15])
+    observation[:, 11] = 0.5
+    parameters = {
+        "channel_0.a": torch.full((4,), 0.5),
+        "channel_0.b": torch.full((4,), 0.5),
+        "channel_1.a": torch.ones(4),
+        "channel_1.b": torch.full((4,), -0.5),
+    }
+    signals = _apply_gantry_task_flow(observation, parameters)
+    horizontal = -parameters["channel_0.a"] * signals[0]["x"] + parameters["channel_0.b"]
+    assert torch.all(horizontal.abs() > 0.02)
+    assert torch.all(horizontal.sign() == -observation[:, 10].sign())
+    assert torch.all(signals[1]["x"] == parameters["channel_1.b"] / parameters["channel_1.a"])

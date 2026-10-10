@@ -4,7 +4,10 @@ This repository provides a generic Go environment runtime and a localhost Python
 
 ## Connectome-constrained controller
 
-The learner can use `mlp` (the existing Gaussian actor), `random_graph` (a degree-preserving random topology baseline), or `fly_connectome` (a fruit-fly **connectome-inspired**, directed sparse graph actor).
+The learner can use `mlp` (a direct-action Gaussian actor), `parametric_mlp`
+(dense SAC over the six bounded coefficients of `f(x; theta)`), `random_graph`
+(a degree-preserving random topology baseline), or `fly_connectome` (a fruit-fly
+**connectome-inspired**, directed sparse graph actor).
 
 The graph topology is a biological inductive bias; SAC still trains the sensory encoder, neuron biases/leaks, decoder gains, uncertainty head, and optionally one gain per existing edge. It never creates graph edges. A connectome is mainly a wiring diagram, not a functional copy of a living fly brain. The robot mapping is an engineered experimental decoder, not a claim that selected fly neurons naturally control this robot arm.
 
@@ -48,6 +51,9 @@ The checked-in `.env.example` contains only `NEUPRINT_TOKEN=your_token_here`. `.
 ```bash
 # MLP baseline (default)
 LEARNER_CONTROLLER=mlp poetry run python -m ai
+
+# Dense standalone SAC + f(x); use the frontend's pure_rl control mode.
+LEARNER_CONTROLLER=parametric_mlp poetry run python -m ai
 
 # Biological topology baseline
 LEARNER_CONTROLLER=fly_connectome \

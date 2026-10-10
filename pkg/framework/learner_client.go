@@ -31,18 +31,52 @@ type CheckpointingLearner interface {
 	SaveCheckpoint(context.Context) (CheckpointResult, error)
 }
 
+// EpisodeResultLearner receives completed episodes directly from the runtime.
+// Replay sampling is not an authoritative source for episode counts.
+type EpisodeResultLearner interface {
+	RecordEpisodeResult(context.Context, EpisodeResult) (EpisodeStopResult, error)
+}
+
+type EpisodeResult struct {
+	ID      string
+	Success bool
+	Reward  float64
+}
+
+type EpisodeStopResult struct {
+	StopTraining         bool
+	CompletedEpisodes    uint64
+	RollingSuccessRate   float64
+	ConsecutiveSuccesses uint64
+	Reason               string
+}
+
 type HealthStatus struct {
-	Ready         bool
-	PolicyVersion uint64
-	TrainingStep  uint64
-	Device        string
+	Ready           bool
+	PolicyVersion   uint64
+	TrainingStep    uint64
+	Device          string
+	ModelName       string
+	ControllerType  string
+	ActiveModelName string
 }
 
 type PredictionResult struct {
-	Actions         []Action
-	FlyBaseActions  []Action
-	ResidualActions []Action
-	PolicyVersion   uint64
+	Actions          []Action
+	FlyBaseActions   []Action
+	ResidualActions  []Action
+	ReflexParameters []ReflexParameter
+	PolicyVersion    uint64
+}
+
+// ReflexParameter is read-only diagnostic data for one bounded f(x; theta)
+// coefficient. Values align with the states supplied to PredictBatch.
+type ReflexParameter struct {
+	Name         string
+	Values       []float32
+	MinValue     float32
+	MaxValue     float32
+	DefaultValue float32
 }
 
 type TrainingResult struct {
@@ -74,6 +108,28 @@ type LearnerClient struct {
 	conn    *grpc.ClientConn
 	client  learnerv1.LearnerServiceClient
 	timeout time.Duration
+}
+
+func (c *LearnerClient) RecordEpisodeResult(ctx context.Context, episode EpisodeResult) (EpisodeStopResult, error) {
+	if episode.ID == "" || math.IsNaN(episode.Reward) || math.IsInf(episode.Reward, 0) {
+		return EpisodeStopResult{}, errors.New("episode result requires an ID and finite reward")
+	}
+	callContext, cancel, err := c.requestContext(ctx)
+	if err != nil {
+		return EpisodeStopResult{}, err
+	}
+	defer cancel()
+	response, err := c.client.RecordEpisodeResult(callContext, &learnerv1.RecordEpisodeResultRequest{
+		EpisodeId: episode.ID, Success: episode.Success, EpisodeReward: float32(episode.Reward),
+	})
+	if err != nil {
+		return EpisodeStopResult{}, fmt.Errorf("record episode result: %w", err)
+	}
+	return EpisodeStopResult{
+		StopTraining: response.GetStopTraining(), CompletedEpisodes: response.GetCompletedEpisodes(),
+		RollingSuccessRate:   float64(response.GetRollingSuccessRate()),
+		ConsecutiveSuccesses: response.GetConsecutiveSuccesses(), Reason: response.GetReason(),
+	}, nil
 }
 
 func NewLearnerClient(ctx context.Context) (*LearnerClient, error) {
@@ -112,7 +168,10 @@ func (c *LearnerClient) HealthCheck(ctx context.Context) (HealthStatus, error) {
 	if err != nil {
 		return HealthStatus{}, fmt.Errorf("learner health check: %w", err)
 	}
-	return HealthStatus{Ready: response.GetReady(), PolicyVersion: response.GetPolicyVersion(), TrainingStep: response.GetTrainingStep(), Device: response.GetDevice()}, nil
+	return HealthStatus{
+		Ready: response.GetReady(), PolicyVersion: response.GetPolicyVersion(), TrainingStep: response.GetTrainingStep(), Device: response.GetDevice(),
+		ModelName: response.GetModelName(), ControllerType: response.GetControllerType(), ActiveModelName: response.GetActiveModelName(),
+	}, nil
 }
 
 func (c *LearnerClient) PredictBatch(ctx context.Context, states []State, policyVersion uint64) (PredictionResult, error) {
@@ -170,7 +229,25 @@ func (c *LearnerClient) PredictBatch(ctx context.Context, states []State, policy
 	if err != nil {
 		return PredictionResult{}, err
 	}
-	return PredictionResult{Actions: actions, FlyBaseActions: flyBaseActions, ResidualActions: residualActions, PolicyVersion: response.GetPolicyVersion()}, nil
+	reflexParameters := make([]ReflexParameter, 0, len(response.GetReflexParameters()))
+	for index, parameter := range response.GetReflexParameters() {
+		if parameter.GetName() == "" {
+			return PredictionResult{}, fmt.Errorf("predict batch reflex parameter %d has an empty name", index)
+		}
+		values := parameter.GetValues()
+		if len(values) != len(states) {
+			return PredictionResult{}, fmt.Errorf("predict batch reflex parameter %q returned %d values for %d states", parameter.GetName(), len(values), len(states))
+		}
+		allValues := append(append([]float32(nil), values...), parameter.GetMinValue(), parameter.GetMaxValue(), parameter.GetDefaultValue())
+		if err := validateFinite("reflex parameter "+parameter.GetName(), allValues); err != nil {
+			return PredictionResult{}, err
+		}
+		reflexParameters = append(reflexParameters, ReflexParameter{
+			Name: parameter.GetName(), Values: append([]float32(nil), values...),
+			MinValue: parameter.GetMinValue(), MaxValue: parameter.GetMaxValue(), DefaultValue: parameter.GetDefaultValue(),
+		})
+	}
+	return PredictionResult{Actions: actions, FlyBaseActions: flyBaseActions, ResidualActions: residualActions, ReflexParameters: reflexParameters, PolicyVersion: response.GetPolicyVersion()}, nil
 }
 
 func (c *LearnerClient) TrainBatch(ctx context.Context, transitions []Transition) (TrainingResult, error) {

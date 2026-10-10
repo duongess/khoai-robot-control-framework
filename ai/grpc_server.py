@@ -3,6 +3,7 @@
 import json
 import math
 import logging
+import os
 import signal
 import sys
 import threading
@@ -32,7 +33,25 @@ from ai.sac import SACAgent, TensorBatch
 from gen.python.learner.v1 import environment_pb2, learner_pb2, learner_pb2_grpc
 
 
-ADDRESS = "127.0.0.1:50051"
+ADDRESS = os.getenv("LEARNER_ADDRESS", "127.0.0.1:50051")
+SUCCESS_WINDOW_EPISODES = 50
+BEST_SAVE_SUCCESS_RATE = 0.90
+STOP_SUCCESS_RATE = 0.95
+STOP_CONSECUTIVE_SUCCESSES = 20
+MAX_TRAINING_EPISODES = 150
+EARLY_STOP_MESSAGE = "[EARLY STOPPING TRIGGERED] Target achieved. Model locked at peak performance. Ready for evaluation."
+
+ACTIVE_MODEL_NAMES = {
+    "mlp": "SAC MLP (Dense)",
+    "parametric_mlp": "Parametric MLP (Dense)",
+    "fly_connectome": "Fly Connectome (Sparse)",
+    "random_graph": "Random Graph (Sparse)",
+}
+
+
+def active_model_name(controller_type: str) -> str:
+    """Return an operator-facing identity for the process-selected actor."""
+    return ACTIVE_MODEL_NAMES.get(controller_type, controller_type)
 
 
 def _upgrade_legacy_default_grip(config: object) -> dict | None:
@@ -76,23 +95,47 @@ LOGGER = configure_logging()
 class LearnerServicer(learner_pb2_grpc.LearnerServiceServicer):
     """A local SAC learner that trains only on supplied transition batches."""
 
-    def __init__(self, config: LearnerConfig | None = None, model_name: str | None = None) -> None:
+    @staticmethod
+    def _best_checkpoint_names() -> tuple[str, ...]:
+        return ("best_model_checkpoint", "best_policy_checkpoint", "best_production_checkpoint")
+
+    def __init__(self, config: LearnerConfig | None = None, model_name: str | None = None, eval_mode: bool = False) -> None:
         requested_config = config or LearnerConfig.from_environment()
+        self._eval_mode = bool(eval_mode) or bool(getattr(requested_config, "eval_mode", False))
         self._model_name = validate_model_name(model_name) if model_name else ""
         checkpoint = checkpoint_path(requested_config.checkpoint_dir, self._model_name) if self._model_name else None
         payload = load_checkpoint(checkpoint) if checkpoint and checkpoint.is_file() else None
+        if payload is None and self._eval_mode and not self._model_name:
+            for name in self._best_checkpoint_names():
+                candidate = checkpoint_path(requested_config.checkpoint_dir, name)
+                if not candidate.is_file():
+                    continue
+                try:
+                    payload = load_checkpoint(candidate)
+                except ValueError:
+                    continue
+                self._model_name = name
+                checkpoint = candidate
+                break
         if payload is None:
             self._config = requested_config
         else:
             try:
-                # Loading by name must work without making a user remember all
-                # controller/graph environment variables from the original run.
                 saved_config = LearnerConfig(**payload["learner_config"])
             except (TypeError, ValueError) as error:
                 raise ValueError(f"checkpoint {checkpoint.name} has an invalid learner configuration: {error}") from error
+            if saved_config.controller_type != requested_config.controller_type:
+                raise ValueError(
+                    f"checkpoint {checkpoint.name} uses controller {saved_config.controller_type!r}, "
+                    f"but this learner process was started for {requested_config.controller_type!r}"
+                )
             # The caller may deliberately move their local checkpoint directory;
             # retain that location while restoring every training setting.
             self._config = replace(saved_config, checkpoint_dir=requested_config.checkpoint_dir)
+            if not self._eval_mode and isinstance(payload.get("evaluation"), dict) and payload["evaluation"].get("early_stopped") is True and payload["evaluation"].get("early_stopping_schema") != 1:
+                # The old success gate forced deterministic inference before
+                # saving. Restore exploration when resuming that run.
+                self._config = replace(self._config, deterministic_inference=False)
         self._agent = SACAgent(SACConfig(
             state_dim=self._config.state_dim,
             action_dim=self._config.action_dim,
@@ -125,9 +168,16 @@ class LearnerServicer(learner_pb2_grpc.LearnerServiceServicer):
             vertical_acceleration_observation_index=self._config.vertical_acceleration_observation_index,
             previous_vertical_action_observation_index=self._config.previous_vertical_action_observation_index,
         ))
-        # A new graph learner must never silently serve the legacy residual actor.
+        if self._eval_mode:
+            self._config = replace(self._config, deterministic_inference=True)
+            self._agent.actor.eval()
+            self._agent.critic_one.eval()
+            self._agent.critic_two.eval()
+            self._agent.log_alpha.requires_grad_(False)
+        # A new parametric learner must publish its registered six-coefficient
+        # reflex before the first immutable actor snapshot is created.
         # Checkpoints restore their own persisted schema in _restore_checkpoint.
-        if payload is None and self._config.controller_type in {"fly_connectome", "random_graph"}:
+        if payload is None and self._config.controller_type in {"parametric_mlp", "fly_connectome", "random_graph"}:
             self._agent.register_reflex_law(DEFAULT_GANTRY_REFLEX_CONFIG)
         self._samples_seen = 0
         # Version zero is reserved by the protocol for "latest". Every actual
@@ -141,19 +191,28 @@ class LearnerServicer(learner_pb2_grpc.LearnerServiceServicer):
         self._training_lock = threading.Lock()
         self._training_step = 0
         self._predict_requests = 0
+        # Computing bounded theta telemetry currently invokes the actor's
+        # parameter head. Keep it out of the 99% control path and refresh it
+        # together with the existing diagnostic actor pass instead.
+        self._reflex_parameter_telemetry: dict[tuple[int, int], list[dict]] = {}
         self._train_requests = 0
-        self._episode_results = deque(maxlen=100)
-        self._episode_keys: set[tuple[object, ...]] = set()
+        self._episode_results = deque(maxlen=SUCCESS_WINDOW_EPISODES)
+        self._reported_episode_ids: set[str] = set()
+        self._completed_episodes = 0
+        self._consecutive_successes = 0
         self._best_success_rate = 0.0
         self._best_average_reward = float("-inf")
-        self._high_success_streak = 0
+        self._best_window_episodes = 0
         self._early_stopped = False
+        self._stop_reason = ""
         self._last_metrics = self._empty_metrics()
+        if self._config.controller_type in {"fly_connectome", "random_graph"}:
+            self._re_enable_connectome_gradients()
         if payload is not None:
             self._restore_checkpoint(payload, checkpoint)
             # Legacy checkpoints predate the registry. Upgrade them at boot
-            # rather than reviving the residual branch for a new episode.
-            if self._config.controller_type in {"fly_connectome", "random_graph"}:
+            # rather than serving an actor with no parameter-space reflex.
+            if self._config.controller_type in {"parametric_mlp", "fly_connectome", "random_graph"}:
                 if not self._agent.actor.reflex_parameter_count:
                     self._agent.register_reflex_law(DEFAULT_GANTRY_REFLEX_CONFIG)
                     self._actor_snapshots = {self._policy_version: deepcopy(self._agent.actor).eval()}
@@ -166,6 +225,7 @@ class LearnerServicer(learner_pb2_grpc.LearnerServiceServicer):
     def PredictBatch(self, request, context):
         try:
             states = self._states_to_tensor(request.states, "states")
+            deterministic = self._config.deterministic_inference or self._eval_mode
             # SAC must sample actions while it is collecting replay data. A
             # deterministic, untrained actor repeats one arbitrary vector (for
             # example, simultaneous right/down motion) and never explores a
@@ -183,24 +243,64 @@ class LearnerServicer(learner_pb2_grpc.LearnerServiceServicer):
                     grpc.StatusCode.FAILED_PRECONDITION,
                     f"policy snapshot {served_version} is unavailable; start a fresh episode",
                 )
+
+            self._predict_requests += 1
+            should_log = self._predict_requests % self._config.log_every_n_requests == 0
             with torch.inference_mode():
-                mean, log_std = actor(states)
                 predicted_actions, fly_base_actions, residual_actions = self._agent.act_with_actor_components(
-                    actor, states, deterministic=self._config.deterministic_inference
+                    actor, states, deterministic=deterministic
                 )
+                # For every parameter-space policy, the primary protobuf action
+                # is authoritative f(x; theta), never an unbounded parameter-head
+                # output or a zero placeholder. Dense parametric MLP publishes
+                # that command in the residual stream; connectome Parametric SAC
+                # publishes it in the fly-base stream.
+                if getattr(actor, "reflex_parameter_count", 0):
+                    parametric_stream = getattr(actor, "parametric_action_stream", "base")
+                    evaluated_reflex_actions = (
+                        residual_actions if parametric_stream == "residual" else fly_base_actions
+                    )
+                    if not torch.equal(predicted_actions, evaluated_reflex_actions):
+                        raise RuntimeError(
+                            "parametric actor primary action diverged from evaluated f(x; theta)"
+                        )
+                    predicted_actions = evaluated_reflex_actions
                 predicted_actions = predicted_actions.clamp(-1, 1)
+                # Actor statistics are diagnostic only. In particular, a graph
+                # actor performs a full sparse propagation in forward(), so do
+                # not pay for a second actor pass on ordinary control requests.
+                if should_log:
+                    mean, log_std = actor(states)
+                export_reflex_telemetry = getattr(actor, "export_reflex_parameter_telemetry", None)
+                if export_reflex_telemetry is not None and should_log:
+                    if len(self._reflex_parameter_telemetry) >= 32:
+                        self._reflex_parameter_telemetry.clear()
+                    self._reflex_parameter_telemetry[(served_version, len(request.states))] = export_reflex_telemetry(states)
         except ValueError as error:
             context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(error))
         actions = [environment_pb2.Action(values=[float(value) for value in action]) for action in predicted_actions]
         fly_base = [environment_pb2.Action(values=[float(value) for value in action]) for action in fly_base_actions]
         residuals = [environment_pb2.Action(values=[float(value) for value in action]) for action in residual_actions]
-        self._predict_requests += 1
-        if self._predict_requests % self._config.log_every_n_requests == 0:
+        # A cache entry is valid only for the exact immutable actor snapshot
+        # and batch cardinality that produced it. This prevents diagnostic
+        # theta data from ever being paired with another worker's state.
+        cached_reflex_parameters = self._reflex_parameter_telemetry.get((served_version, len(request.states)), [])
+        reflex_parameters = [
+            learner_pb2.ReflexParameter(
+                name=str(parameter["name"]),
+                values=[float(value) for value in parameter["values"]],
+                min_value=float(parameter["min_val"]),
+                max_value=float(parameter["max_val"]),
+                default_value=float(parameter["default"]),
+            )
+            for parameter in cached_reflex_parameters
+        ]
+        if should_log:
             LOGGER.info("predict_batch", extra={"fields": {
                 "states": len(request.states),
                 "requested_policy_version": request.policy_version,
                 "policy_version": served_version,
-                "deterministic": self._config.deterministic_inference,
+                "deterministic": deterministic,
                 "action_mean": [float(value) for value in predicted_actions.mean(dim=0)],
                 "action_std": [float(value) for value in predicted_actions.std(dim=0, unbiased=False)],
                 "fly_base_mean": [float(value) for value in fly_base_actions.mean(dim=0)],
@@ -213,6 +313,7 @@ class LearnerServicer(learner_pb2_grpc.LearnerServiceServicer):
             policy_version=served_version,
             fly_base_actions=fly_base,
             residual_actions=residuals,
+            reflex_parameters=reflex_parameters,
         )
 
     def TrainBatch(self, request, context):
@@ -220,28 +321,48 @@ class LearnerServicer(learner_pb2_grpc.LearnerServiceServicer):
             context.abort(grpc.StatusCode.INVALID_ARGUMENT, "transition batch is required")
         try:
             batch = self._batch_to_tensors(request.batch.transitions)
-            self._record_terminal_transitions(request.batch.transitions)
+            if self._eval_mode:
+                self._agent.actor.eval()
+                self._agent.critic_one.eval()
+                self._agent.critic_two.eval()
+                metrics = dict(self._last_metrics)
+                self._last_metrics = dict(metrics)
+                return learner_pb2.TrainBatchResponse(
+                    accepted=True,
+                    samples_seen=self._samples_seen,
+                    policy_version=self._policy_version,
+                    actor_loss=metrics["actor_loss"],
+                    critic_loss=(metrics["critic_one_loss"] + metrics["critic_two_loss"]) / 2,
+                    alpha_loss=metrics["alpha_loss"],
+                    entropy=metrics["entropy"],
+                    training_step=self._training_step,
+                    critic_one_q=metrics["critic_one_q"],
+                    critic_two_q=metrics["critic_two_q"],
+                    alpha=metrics["alpha"],
+                    actor_log_std_horizontal=metrics["actor_log_std_horizontal"],
+                    actor_log_std_vertical=metrics["actor_log_std_vertical"],
+                    actor_log_std_gripper=metrics["actor_log_std_gripper"],
+                )
             # The Go runtime already applies backpressure, and this lock also
             # makes the service safe if another client submits a train request.
             # Prediction continues against its prior immutable snapshot while
             # the live actor/critics perform a backward pass.
             with self._training_lock:
                 if self._early_stopped:
-                    self._zero_optimizer_gradients()
                     metrics = dict(self._last_metrics)
+                    updated = False
                 else:
                     metrics = self._agent.update(batch)
-                if not self._early_stopped:
+                    updated = True
                     snapshot = deepcopy(self._agent.actor).eval()
                     with self._policy_lock:
                         self._policy_version += 1
                         self._actor_snapshots[self._policy_version] = snapshot
                         while len(self._actor_snapshots) > self._config.max_policy_snapshots:
                             del self._actor_snapshots[min(self._actor_snapshots)]
-                # Keep counters in the same critical section as weights and
-                # policy publication so a concurrent checkpoint is coherent.
-                self._samples_seen += len(request.batch.transitions)
-                if not self._early_stopped:
+                    # Keep counters in the same critical section as weights and
+                    # policy publication so a concurrent checkpoint is coherent.
+                    self._samples_seen += len(request.batch.transitions)
                     self._training_step += 1
         except ValueError as error:
             context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(error))
@@ -250,7 +371,7 @@ class LearnerServicer(learner_pb2_grpc.LearnerServiceServicer):
         if self._train_requests % self._config.log_every_n_requests == 0:
             LOGGER.info("train_batch", extra={"fields": {"received": len(request.batch.transitions), "samples_seen": self._samples_seen, **metrics}})
         return learner_pb2.TrainBatchResponse(
-            accepted=True,
+            accepted=updated,
             samples_seen=self._samples_seen,
             policy_version=self._policy_version,
             actor_loss=metrics["actor_loss"],
@@ -270,104 +391,218 @@ class LearnerServicer(learner_pb2_grpc.LearnerServiceServicer):
     def _empty_metrics() -> dict[str, float]:
         return {"actor_loss": 0.0, "alpha_loss": 0.0, "entropy": 0.0, "critic_one_loss": 0.0, "critic_two_loss": 0.0, "critic_one_q": 0.0, "critic_two_q": 0.0, "alpha": 1.0, "actor_log_std_horizontal": 0.0, "actor_log_std_vertical": 0.0, "actor_log_std_gripper": 0.0}
 
-    def _zero_optimizer_gradients(self) -> None:
-        for optimizer in (self._agent.actor_optimizer, self._agent.critic_one_optimizer, self._agent.critic_two_optimizer, self._agent.alpha_optimizer):
-            optimizer.zero_grad(set_to_none=True)
-
-    def _rolling_success_rate(self) -> float:
+    def _rolling_success_rate(self, window: int | None = None) -> float:
         if not self._episode_results:
             return 0.0
-        return sum(1 for success, _ in self._episode_results if success) / len(self._episode_results)
+        history = list(self._episode_results)
+        if window is not None:
+            history = history[-window:]
+        if not history:
+            return 0.0
+        return sum(1 for success, _ in history if success) / len(history)
 
     def _rolling_average_reward(self) -> float:
         if not self._episode_results:
             return float("-inf")
         return sum(reward for _, reward in self._episode_results) / len(self._episode_results)
 
-    def _freeze_learning_locked(self) -> None:
-        self._zero_optimizer_gradients()
-        for module in (self._agent.actor, self._agent.critic_one, self._agent.critic_two):
-            module.eval()
-            for parameter in module.parameters():
-                parameter.requires_grad_(False)
-        self._agent.log_alpha.requires_grad_(False)
-        self._early_stopped = True
-        LOGGER.warning("[EARLY STOPPING] Target accuracy achieved (>=99%%). Model frozen at peak performance.", extra={"fields": {"success_rate": self._rolling_success_rate(), "episodes": len(self._episode_results)}})
+    def _connectome_parameters(self) -> list[torch.nn.Parameter]:
+        actor = self._agent.actor
+        parameters: list[torch.nn.Parameter] = []
+        for name in (
+            "sensory_encoder",
+            "neuron_bias",
+            "leak_logit",
+            "edge_log_gains",
+            "motor_gain",
+            "motor_bias",
+            "latent_projection",
+            "base_head",
+            "transport_motor_gain",
+            "transport_motor_bias",
+        ):
+            module = getattr(actor, name, None)
+            if isinstance(module, torch.nn.Parameter):
+                parameters.append(module)
+            elif module is not None and hasattr(module, "parameters"):
+                parameters.extend(module.parameters())
+        return parameters
+
+    def _re_enable_connectome_gradients(self) -> None:
+        actor = self._agent.actor
+        connectome_modules = (
+            "sensory_encoder",
+            "neuron_bias",
+            "leak_logit",
+            "edge_log_gains",
+            "motor_gain",
+            "motor_bias",
+            "latent_projection",
+            "base_head",
+            "transport_motor_gain",
+            "transport_motor_bias",
+            "residual_head",
+            "log_std",
+            "parameter_head",
+            "parameter_log_std",
+        )
+        for module_name in connectome_modules:
+            module = getattr(actor, module_name, None)
+            if isinstance(module, torch.nn.Parameter):
+                module.requires_grad_(True)
+            elif module is not None and hasattr(module, "parameters"):
+                for parameter in module.parameters():
+                    parameter.requires_grad_(True)
 
     def _evaluation_state(self) -> dict[str, object]:
-        return {"best_success_rate": self._best_success_rate, "best_average_reward": self._best_average_reward, "high_success_streak": self._high_success_streak, "early_stopped": self._early_stopped, "episode_results": list(self._episode_results)}
+        return {
+            "early_stopping_schema": 1,
+            "best_success_rate": self._best_success_rate,
+            "best_average_reward": self._best_average_reward,
+            "best_window_episodes": self._best_window_episodes,
+            "completed_episodes": self._completed_episodes,
+            "consecutive_successes": self._consecutive_successes,
+            "early_stopped": self._early_stopped,
+            "stop_reason": self._stop_reason,
+            "episode_results": list(self._episode_results),
+        }
 
     def _restore_evaluation_state(self, payload: object) -> None:
         if not isinstance(payload, dict):
             return
         results = payload.get("episode_results")
         if isinstance(results, list):
-            for item in results[-100:]:
+            for item in results[-SUCCESS_WINDOW_EPISODES:]:
                 if isinstance(item, (list, tuple)) and len(item) == 2 and isinstance(item[0], bool) and isinstance(item[1], (int, float)) and math.isfinite(float(item[1])):
                     self._episode_results.append((item[0], float(item[1])))
-        if isinstance(payload.get("best_success_rate"), (int, float)) and math.isfinite(float(payload["best_success_rate"])):
+        count = payload.get("completed_episodes")
+        self._completed_episodes = count if isinstance(count, int) and count >= len(self._episode_results) else len(self._episode_results)
+        streak = payload.get("consecutive_successes")
+        if isinstance(streak, int) and streak >= 0:
+            self._consecutive_successes = streak
+        else:
+            for success, _ in reversed(self._episode_results):
+                if not success:
+                    break
+                self._consecutive_successes += 1
+        if payload.get("best_window_episodes") == SUCCESS_WINDOW_EPISODES and isinstance(payload.get("best_success_rate"), (int, float)) and math.isfinite(float(payload["best_success_rate"])):
             self._best_success_rate = float(payload["best_success_rate"])
+            self._best_window_episodes = SUCCESS_WINDOW_EPISODES
         if isinstance(payload.get("best_average_reward"), (int, float)) and math.isfinite(float(payload["best_average_reward"])):
             self._best_average_reward = float(payload["best_average_reward"])
-        if isinstance(payload.get("high_success_streak"), int) and payload["high_success_streak"] >= 0:
-            self._high_success_streak = payload["high_success_streak"]
-        if payload.get("early_stopped") is True:
-            self._freeze_learning_locked()
+        if payload.get("early_stopping_schema") == 1 and payload.get("early_stopped") is True:
+            self._early_stopped = True
+            self._stop_reason = str(payload.get("stop_reason", ""))
+            self._config = replace(self._config, deterministic_inference=True)
+        elif self._completed_episodes >= MAX_TRAINING_EPISODES:
+            self._early_stopped = True
+            self._stop_reason = "max_episodes"
+            self._config = replace(self._config, deterministic_inference=True)
 
     def _save_best_checkpoint_locked(self, success_rate: float, average_reward: float) -> None:
-        path = checkpoint_path(self._config.checkpoint_dir, "best_policy_checkpoint")
         evaluation = self._evaluation_state()
         evaluation["best_success_rate"] = success_rate
         evaluation["best_average_reward"] = average_reward
-        payload = {"format_version": CHECKPOINT_FORMAT_VERSION, "model_name": "best_policy_checkpoint", "learner_config": asdict(self._config), "agent": self._agent.checkpoint_state(), "samples_seen": self._samples_seen, "policy_version": self._policy_version, "training_step": self._training_step, "evaluation": evaluation}
-        atomic_save_checkpoint(path, payload)
+        evaluation["best_window_episodes"] = len(self._episode_results)
+        paths = [checkpoint_path(self._config.checkpoint_dir, name) for name in self._best_checkpoint_names()]
+        saved_paths = []
+        for path in paths:
+            payload = {"format_version": CHECKPOINT_FORMAT_VERSION, "model_name": path.stem, "learner_config": asdict(self._config), "agent": self._agent.checkpoint_state(), "samples_seen": self._samples_seen, "policy_version": self._policy_version, "training_step": self._training_step, "evaluation": evaluation}
+            atomic_save_checkpoint(path, payload)
+            saved_paths.append(str(path))
         self._best_success_rate = success_rate
         self._best_average_reward = average_reward
-        LOGGER.warning("[AUTO-SAVE] New best model saved with Success Rate: %.1f%%!", success_rate * 100.0, extra={"fields": {"path": str(path), "average_reward": average_reward}})
+        self._best_window_episodes = len(self._episode_results)
+        LOGGER.warning("[AUTO-SAVE] New best model saved with Success Rate: %.1f%%!", success_rate * 100.0, extra={"fields": {"paths": saved_paths, "average_reward": average_reward}})
+
+    def _mark_best_checkpoint_stopped_locked(self) -> None:
+        """Persist the stop flag without replacing the earlier peak weights."""
+        for name in self._best_checkpoint_names():
+            path = checkpoint_path(self._config.checkpoint_dir, name)
+            if not path.is_file():
+                continue
+            payload = load_checkpoint(path)
+            payload["evaluation"] = self._evaluation_state()
+            atomic_save_checkpoint(path, payload)
+
+    def _activate_best_checkpoint_locked(self) -> None:
+        """Serve the saved peak actor for evaluation while leaving SAC frozen."""
+        path = checkpoint_path(self._config.checkpoint_dir, "best_production_checkpoint")
+        payload = load_checkpoint(path)
+        self._agent.actor.load_state_dict(payload["agent"]["actor"])
+        snapshot = deepcopy(self._agent.actor).eval()
+        with self._policy_lock:
+            self._policy_version += 1
+            self._actor_snapshots[self._policy_version] = snapshot
+            while len(self._actor_snapshots) > self._config.max_policy_snapshots:
+                del self._actor_snapshots[min(self._actor_snapshots)]
 
     def _record_episode_result_locked(self, success: bool, average_reward: float) -> None:
+        if self._early_stopped:
+            return
         if not math.isfinite(average_reward):
             raise ValueError("episode reward must be finite")
         self._episode_results.append((bool(success), float(average_reward)))
-        success_rate = self._rolling_success_rate()
+        self._completed_episodes += 1
+        self._consecutive_successes = self._consecutive_successes + 1 if success else 0
+        full_window = len(self._episode_results) == SUCCESS_WINDOW_EPISODES
+        rolling_success_rate = self._rolling_success_rate(window=SUCCESS_WINDOW_EPISODES)
         average = self._rolling_average_reward()
-        self._high_success_streak = self._high_success_streak + 1 if success_rate >= 0.99 else 0
-        if success_rate >= 0.985 and average > self._best_average_reward:
-            self._save_best_checkpoint_locked(success_rate, average)
-        if self._high_success_streak >= 100 and not self._early_stopped:
-            self._freeze_learning_locked()
+        if full_window and rolling_success_rate >= STOP_SUCCESS_RATE:
+            self._stop_reason = "rolling_success_rate"
+        elif self._consecutive_successes >= STOP_CONSECUTIVE_SUCCESSES:
+            self._stop_reason = "consecutive_successes"
+        elif self._completed_episodes >= MAX_TRAINING_EPISODES:
+            self._stop_reason = "max_episodes"
+        if self._stop_reason:
+            self._early_stopped = True
+            self._config = replace(self._config, deterministic_inference=True)
+
+        new_best = full_window and rolling_success_rate >= BEST_SAVE_SUCCESS_RATE and rolling_success_rate > self._best_success_rate + 1e-9
+        if new_best:
+            self._save_best_checkpoint_locked(rolling_success_rate, average)
+        elif self._early_stopped:
+            production_path = checkpoint_path(self._config.checkpoint_dir, "best_production_checkpoint")
+            if self._best_success_rate == 0 or not production_path.is_file():
+                # A 20-success streak may end training before a full 50-episode
+                # window exists. Preserve that model before leaving training.
+                self._save_best_checkpoint_locked(rolling_success_rate, average)
+            else:
+                self._mark_best_checkpoint_stopped_locked()
+        if self._early_stopped:
+            self._activate_best_checkpoint_locked()
+            print(EARLY_STOP_MESSAGE, flush=True)
 
     def record_episode_result(self, success: bool, average_reward: float) -> None:
-        """Record an exact evaluation result from an external episode runner."""
+        """Record one completed episode from an in-process episode runner."""
         with self._training_lock:
             self._record_episode_result_locked(success, float(average_reward))
 
-    @staticmethod
-    def _terminal_success(transition) -> bool:
-        if transition.truncated:
-            return False
-        values = list(transition.next_state.values)
-        if len(values) > 19 and math.isfinite(float(values[19])):
-            phase_code = round((float(values[19]) + 1.0) * 4.5)
-            if phase_code == 8:
-                return True
-            if phase_code == 9:
-                return False
-        return float(transition.reward) > 0.0
-
-    def _record_terminal_transitions(self, transitions) -> None:
-        with self._training_lock:
-            for transition in transitions:
-                if not (transition.terminated or transition.truncated):
-                    continue
-                episode_id = transition.episode_id
-                key = (episode_id, int(transition.step)) if episode_id else ("terminal", tuple(round(float(value), 6) for value in transition.next_state.values), round(float(transition.reward), 6), bool(transition.truncated))
-                if key in self._episode_keys:
-                    continue
-                self._episode_keys.add(key)
-                self._record_episode_result_locked(self._terminal_success(transition), float(transition.reward))
-                if len(self._episode_keys) > 10000:
-                    self._episode_keys.clear()
+    def RecordEpisodeResult(self, request, context):
+        if not request.episode_id or not math.isfinite(float(request.episode_reward)):
+            context.abort(grpc.StatusCode.INVALID_ARGUMENT, "episode result requires an ID and finite reward")
+        try:
+            with self._training_lock:
+                if self._eval_mode:
+                    return learner_pb2.RecordEpisodeResultResponse(
+                        stop_training=True,
+                        completed_episodes=self._completed_episodes,
+                        rolling_success_rate=self._rolling_success_rate(window=SUCCESS_WINDOW_EPISODES),
+                        consecutive_successes=self._consecutive_successes,
+                        reason="evaluation_mode",
+                    )
+                if request.episode_id not in self._reported_episode_ids:
+                    self._record_episode_result_locked(bool(request.success), float(request.episode_reward))
+                    self._reported_episode_ids.add(request.episode_id)
+                return learner_pb2.RecordEpisodeResultResponse(
+                    stop_training=self._early_stopped,
+                    completed_episodes=self._completed_episodes,
+                    rolling_success_rate=self._rolling_success_rate(window=SUCCESS_WINDOW_EPISODES),
+                    consecutive_successes=self._consecutive_successes,
+                    reason=self._stop_reason,
+                )
+        except ValueError as error:
+            context.abort(grpc.StatusCode.INTERNAL, str(error))
 
     def HealthCheck(self, request, context):
         return learner_pb2.HealthCheckResponse(
@@ -376,6 +611,8 @@ class LearnerServicer(learner_pb2_grpc.LearnerServiceServicer):
             training_step=self._training_step,
             device=str(self._agent.device),
             model_name=self._model_name,
+            controller_type=self._config.controller_type,
+            active_model_name=active_model_name(self._config.controller_type),
         )
 
     def SaveCheckpoint(self, request, context):
@@ -423,8 +660,6 @@ class LearnerServicer(learner_pb2_grpc.LearnerServiceServicer):
             # resumed model is not accidentally re-frozen for 128 updates.
             self._agent.training_step = self._training_step
             self._agent._configure_actor_trainability()
-            if self._early_stopped:
-                self._freeze_learning_locked()
         except (KeyError, TypeError, ValueError) as error:
             raise ValueError(f"could not restore checkpoint {checkpoint.name}: {error}") from error
         # Episode snapshots intentionally do not survive a process restart.
@@ -484,14 +719,21 @@ def create_server(config: LearnerConfig | None = None, model_name: str | None = 
     return server
 
 
-def serve(model_name: str | None = None) -> None:
-    config = LearnerConfig.from_environment()
+def serve(
+    model_name: str | None = None,
+    *,
+    eval_mode: bool | None = None,
+    controller_type: str | None = None,
+) -> None:
+    config = LearnerConfig.from_environment(controller_type_override=controller_type)
+    if eval_mode is None:
+        eval_mode = config.eval_mode
     # Set these before any gRPC work is accepted. Limiting threads prevents a
     # small CPU actor/critic update from spawning enough native workers to make
     # the browser and desktop unresponsive.
     torch.set_num_threads(config.torch_num_threads)
     torch.set_num_interop_threads(config.torch_num_interop_threads)
-    server = create_server(config, model_name)
+    server = create_server(replace(config, eval_mode=bool(eval_mode)), model_name)
     server.start()
     LOGGER.info("server_started", extra={"fields": {"address": ADDRESS}})
 
@@ -502,3 +744,37 @@ def serve(model_name: str | None = None) -> None:
     signal.signal(signal.SIGINT, stop_server)
     signal.signal(signal.SIGTERM, stop_server)
     server.wait_for_termination()
+
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        prog="python -m ai.grpc_server",
+        description="Run a local SAC learner service for the Khoai robot runtime.",
+    )
+    parser.add_argument(
+        "model_name",
+        nargs="?",
+        default=None,
+        help="Optional checkpoint name to load or create. Example: grasp-v1",
+    )
+    parser.add_argument(
+        "--eval",
+        action="store_true",
+        help="Run in deterministic evaluation mode and load the best checkpoint without updating gradients or replay data.",
+    )
+    parser.add_argument(
+        "--controller",
+        choices=sorted(ACTIVE_MODEL_NAMES),
+        default=None,
+        help="Actor architecture for this process. Overrides LEARNER_CONTROLLER.",
+    )
+    args = parser.parse_args()
+    # Preserve named-checkpoint compatibility while making the documented
+    # `python -m ai.grpc_server parametric_mlp` startup select that architecture
+    # when no explicit --controller flag is supplied.
+    cli_controller = args.controller
+    if cli_controller is None and args.model_name in ACTIVE_MODEL_NAMES:
+        cli_controller = args.model_name
+    serve(args.model_name, eval_mode=args.eval, controller_type=cli_controller)

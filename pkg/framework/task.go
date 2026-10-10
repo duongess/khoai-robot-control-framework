@@ -6,6 +6,12 @@ type Task interface {
 	Step(Action) (StepResult, error)
 }
 
+// TerminalTask lets a runtime detect a terminal environment before issuing
+// another action, including tasks whose last Step did not set Done.
+type TerminalTask interface {
+	IsTerminal() bool
+}
+
 // DecomposedActionTask optionally consumes the two branches of a dual-loop
 // actor in addition to its composed action. Tasks use this for control-mode
 // ablations and telemetry; the ordinary three-dimensional action contract is

@@ -39,44 +39,49 @@ type runtimeWorker struct {
 	lastInfo             map[string]float32
 	outcome              Outcome
 	actionSource         string
+	reflexParameters     []ReflexParameterValue
 }
 
+const rollingSuccessWindowEpisodes = 1000
+
 type runtimeMetrics struct {
-	totalSteps            uint64
-	totalEpisodes         uint64
-	successes             uint64
-	totalReward           float64
-	trainingBatches       uint64
-	policyVersion         uint64
-	trainingStep          uint64
-	actorLoss             float32
-	criticLoss            float32
-	alphaLoss             float32
-	entropy               float32
-	criticOneQ            float32
-	criticTwoQ            float32
-	alpha                 float32
-	actorLogStdHorizontal float32
-	actorLogStdVertical   float32
-	actorLogStdGripper    float32
-	startedAt             time.Time
-	lastProgressAt        time.Time
-	rateStartedAt         time.Time
-	rateStartSteps        uint64
-	rateStartEpisodes     uint64
-	stepsPerSecond        float64
-	episodesPerSecond     float64
-	actionCount           uint64
-	rawActionSum          []float64
-	rawActionSquare       []float64
-	filteredActionSum     []float64
-	filteredActionSquare  []float64
-	deadZoneRemoved       []uint64
-	filterModified        []uint64
-	phaseCounts           map[int]uint64
-	failureReasons        map[string]uint64
-	contactSamples        uint64
-	attachmentSamples     uint64
+	totalSteps             uint64
+	totalEpisodes          uint64
+	successes              uint64
+	totalReward            float64
+	recentEpisodeSuccesses []bool
+	recentEpisodeIndex     int
+	trainingBatches        uint64
+	policyVersion          uint64
+	trainingStep           uint64
+	actorLoss              float32
+	criticLoss             float32
+	alphaLoss              float32
+	entropy                float32
+	criticOneQ             float32
+	criticTwoQ             float32
+	alpha                  float32
+	actorLogStdHorizontal  float32
+	actorLogStdVertical    float32
+	actorLogStdGripper     float32
+	startedAt              time.Time
+	lastProgressAt         time.Time
+	rateStartedAt          time.Time
+	rateStartSteps         uint64
+	rateStartEpisodes      uint64
+	stepsPerSecond         float64
+	episodesPerSecond      float64
+	actionCount            uint64
+	rawActionSum           []float64
+	rawActionSquare        []float64
+	filteredActionSum      []float64
+	filteredActionSquare   []float64
+	deadZoneRemoved        []uint64
+	filterModified         []uint64
+	phaseCounts            map[int]uint64
+	failureReasons         map[string]uint64
+	contactSamples         uint64
+	attachmentSamples      uint64
 }
 
 // ActionStatistics makes the effect of task-side filtering visible. It allows
@@ -93,18 +98,29 @@ type ActionStatistics struct {
 }
 
 type WorkerSnapshot struct {
-	ID            int                `json:"id"`
-	EpisodeID     uint64             `json:"episode_id"`
-	EpisodeStep   uint64             `json:"episode_step"`
-	State         State              `json:"state"`
-	LastAction    Action             `json:"last_action"`
-	LastReward    float32            `json:"last_reward"`
-	EpisodeReward float64            `json:"episode_reward"`
-	PolicyVersion uint64             `json:"policy_version"`
-	Info          map[string]float32 `json:"info,omitempty"`
-	Outcome       Outcome            `json:"outcome"`
-	ActionSource  string             `json:"action_source"`
-	Metadata      map[string]any     `json:"metadata,omitempty"`
+	ID               int                    `json:"id"`
+	EpisodeID        uint64                 `json:"episode_id"`
+	EpisodeStep      uint64                 `json:"episode_step"`
+	State            State                  `json:"state"`
+	LastAction       Action                 `json:"last_action"`
+	LastReward       float32                `json:"last_reward"`
+	EpisodeReward    float64                `json:"episode_reward"`
+	PolicyVersion    uint64                 `json:"policy_version"`
+	Info             map[string]float32     `json:"info,omitempty"`
+	Outcome          Outcome                `json:"outcome"`
+	ActionSource     string                 `json:"action_source"`
+	ReflexParameters []ReflexParameterValue `json:"reflex_parameters,omitempty"`
+	Metadata         map[string]any         `json:"metadata,omitempty"`
+}
+
+// ReflexParameterValue is one selected worker's bounded theta coefficient.
+// It is telemetry only; LastAction remains the command applied to the task.
+type ReflexParameterValue struct {
+	Name         string  `json:"name"`
+	Value        float32 `json:"value"`
+	MinValue     float32 `json:"min_value"`
+	MaxValue     float32 `json:"max_value"`
+	DefaultValue float32 `json:"default_value"`
 }
 
 type RuntimeSnapshot struct {
@@ -160,6 +176,7 @@ func (r *Runtime) Configure(config RuntimeConfig, learner Learner) error {
 		return errors.New("runtime cannot be configured while active")
 	}
 	r.config, r.learner, r.replay = config, learner, replay
+	r.trainingStopped = false
 	r.metrics.actionCount = 0
 	r.metrics.rawActionSum = nil
 	r.metrics.rawActionSquare = nil
@@ -221,6 +238,7 @@ func (r *Runtime) Start(ctx context.Context) error {
 	}
 	loopContext, cancel := context.WithCancel(ctx)
 	r.workers, r.cancel, r.done, r.status, r.lastError = workers, cancel, make(chan struct{}), RuntimeRunning, ""
+	r.runID = uint64(time.Now().UnixNano())
 	now := time.Now()
 	r.metrics.startedAt, r.metrics.lastProgressAt, r.metrics.rateStartedAt = now, now, now
 	r.metrics.rateStartSteps, r.metrics.rateStartEpisodes = r.metrics.totalSteps, r.metrics.totalEpisodes
@@ -251,7 +269,26 @@ func (r *Runtime) run(ctx context.Context, done chan struct{}, descriptor TaskDe
 }
 
 func (r *Runtime) cycle(ctx context.Context, descriptor TaskDescriptor) {
-	r.mu.RLock()
+	r.mu.Lock()
+	if r.status != RuntimeRunning {
+		r.mu.Unlock()
+		return
+	}
+	// A task may become terminal outside Step, or a prior cycle may have been
+	// interrupted after observing a terminal state. Reset before prediction so
+	// no action is ever applied to a terminal environment.
+	for _, worker := range r.workers {
+		terminal, hasTerminal := worker.task.(TerminalTask)
+		if worker.outcome != OutcomeRunning || (hasTerminal && terminal.IsTerminal()) {
+			if err := r.resetWorker(worker); err != nil {
+				r.lastError = fmt.Sprintf("worker %d terminal reset: %v", worker.id, err)
+				r.status = RuntimeError
+				r.mu.Unlock()
+				return
+			}
+		}
+	}
+	generation := r.resetGeneration
 	useRandomWarmup := r.metrics.totalSteps < uint64(r.config.RandomActionWarmupTransitions)
 	warmupSeed := r.config.ReplaySampleSeed + int64(r.metrics.totalSteps)*7919
 	groups := make(map[uint64][]int)
@@ -259,13 +296,14 @@ func (r *Runtime) cycle(ctx context.Context, descriptor TaskDescriptor) {
 		groups[worker.episodePolicyVersion] = append(groups[worker.episodePolicyVersion], i)
 	}
 	learner := r.learner
-	r.mu.RUnlock()
+	r.mu.Unlock()
 
 	type indexedPrediction struct {
-		action   Action
-		flyBase  Action
-		residual Action
-		version  uint64
+		action           Action
+		flyBase          Action
+		residual         Action
+		reflexParameters []ReflexParameterValue
+		version          uint64
 	}
 	predictions := make(map[int]indexedPrediction, len(r.workers))
 	if useRandomWarmup {
@@ -315,12 +353,21 @@ func (r *Runtime) cycle(ctx context.Context, descriptor TaskDescriptor) {
 			if len(prediction.ResidualActions) == len(states) {
 				item.residual = prediction.ResidualActions[position]
 			}
+			if len(prediction.ReflexParameters) > 0 {
+				item.reflexParameters = make([]ReflexParameterValue, len(prediction.ReflexParameters))
+				for parameterIndex, parameter := range prediction.ReflexParameters {
+					item.reflexParameters[parameterIndex] = ReflexParameterValue{
+						Name: parameter.Name, Value: parameter.Values[position], MinValue: parameter.MinValue,
+						MaxValue: parameter.MaxValue, DefaultValue: parameter.DefaultValue,
+					}
+				}
+			}
 			predictions[index] = item
 		}
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.status != RuntimeRunning {
+	if r.status != RuntimeRunning || generation != r.resetGeneration {
 		return
 	}
 	for index, worker := range r.workers {
@@ -382,13 +429,16 @@ func (r *Runtime) cycle(ctx context.Context, descriptor TaskDescriptor) {
 			}
 			appliedAction = result.AppliedAction
 		}
-		transition := Transition{Observation: worker.state, Action: append(Action(nil), appliedAction...), Reward: result.Reward, NextObservation: result.State, Outcome: result.Outcome, Done: result.Done}
+		terminal, hasTerminal := worker.task.(TerminalTask)
+		done := result.Done || (hasTerminal && terminal.IsTerminal())
+		transition := Transition{Observation: worker.state, Action: append(Action(nil), appliedAction...), Reward: result.Reward, NextObservation: result.State, Outcome: result.Outcome, Done: done}
 		r.replay.Add(transition)
 		worker.actionSource = "policy"
 		if useRandomWarmup {
 			worker.actionSource = "random_warmup"
 		}
 		worker.lastAction, worker.lastReward, worker.lastInfo, worker.outcome = append(Action(nil), action...), result.Reward, cloneInfo(result.Info), result.Outcome
+		worker.reflexParameters = append([]ReflexParameterValue(nil), prediction.reflexParameters...)
 		r.recordAction(action, result.Info)
 		if phase, ok := result.Info["phase_numeric"]; ok {
 			r.metrics.phaseCounts[int(phase)]++
@@ -403,26 +453,41 @@ func (r *Runtime) cycle(ctx context.Context, descriptor TaskDescriptor) {
 		worker.episodeReward += float64(result.Reward)
 		r.metrics.totalSteps++
 		r.metrics.totalReward += float64(result.Reward)
-		if result.Done {
+		if done {
 			r.metrics.totalEpisodes++
+			r.recordEpisodeOutcome(result.Outcome == OutcomeSuccess)
 			if result.Outcome == OutcomeSuccess {
 				r.metrics.successes++
 			} else if reason, ok := result.Info["failure_reason_code"]; ok && reason > 0 {
 				r.metrics.failureReasons[fmt.Sprintf("reason_%d", int(reason))]++
 			}
-			state, resetErr := worker.task.Reset()
-			if resetErr != nil {
+			episode := EpisodeResult{
+				ID:      fmt.Sprintf("%d-%d-%d", r.runID, worker.id, worker.episodeID),
+				Success: result.Outcome == OutcomeSuccess,
+				Reward:  worker.episodeReward,
+			}
+			if resetErr := r.resetWorker(worker); resetErr != nil {
 				r.lastError = fmt.Sprintf("worker %d reset: %v", worker.id, resetErr)
 				r.status = RuntimeError
 				return
 			}
-			worker.state, worker.episodeID, worker.episodeStep, worker.episodeReward, worker.episodePolicyVersion, worker.lastInfo, worker.outcome, worker.actionSource = append(State(nil), state...), worker.episodeID+1, 0, 0, 0, nil, OutcomeRunning, "pending"
+			if reporter, ok := r.learner.(EpisodeResultLearner); ok && !r.trainingStopped {
+				stop, reportErr := reporter.RecordEpisodeResult(ctx, episode)
+				if reportErr != nil {
+					r.lastError = fmt.Sprintf("record episode result: %v", reportErr)
+					r.status = RuntimeError
+					return
+				}
+				if stop.StopTraining {
+					r.trainingStopped = true
+				}
+			}
 		} else {
 			worker.state = append(State(nil), result.State...)
 		}
 	}
 	r.updateRates(time.Now())
-	shouldTrain := !r.trainingInFlight && r.replay.Len() >= r.config.WarmupTransitions && r.metrics.totalSteps%uint64(r.config.TrainingInterval) == 0
+	shouldTrain := !r.trainingStopped && !r.trainingInFlight && r.replay.Len() >= r.config.WarmupTransitions && r.metrics.totalSteps%uint64(r.config.TrainingInterval) == 0
 	if shouldTrain {
 		sample, sampleErr := r.replay.Sample(r.config.TrainingBatchSize)
 		if sampleErr == nil {
@@ -474,6 +539,7 @@ func (r *Runtime) restartWorkersAfterSnapshotEviction(indexes []int, evictedVers
 		worker.episodeID++
 		worker.episodeStep = 0
 		worker.lastAction = nil
+		worker.reflexParameters = nil
 		worker.lastReward = 0
 		worker.episodeReward = 0
 		worker.episodePolicyVersion = 0
@@ -539,8 +605,17 @@ func (r *Runtime) train(ctx context.Context, transitions []Transition) {
 		r.lastError = fmt.Sprintf("train batch: %v", err)
 		return
 	}
-	r.metrics.trainingBatches++
+	if !result.Accepted {
+		return
+	}
+	// The learner's training_step is the authoritative count of completed
+	// gradient updates. Evaluation-mode learners may acknowledge TrainBatch
+	// requests without updating weights, so counting Accepted responses would
+	// falsely report training activity.
 	r.metrics.policyVersion, r.metrics.trainingStep = result.PolicyVersion, result.TrainingStep
+	if result.TrainingStep > r.metrics.trainingBatches {
+		r.metrics.trainingBatches = result.TrainingStep
+	}
 	r.metrics.actorLoss, r.metrics.criticLoss, r.metrics.alphaLoss, r.metrics.entropy = result.ActorLoss, result.CriticLoss, result.AlphaLoss, result.Entropy
 	r.metrics.criticOneQ, r.metrics.criticTwoQ, r.metrics.alpha = result.CriticOneQ, result.CriticTwoQ, result.Alpha
 	r.metrics.actorLogStdHorizontal, r.metrics.actorLogStdVertical, r.metrics.actorLogStdGripper = result.ActorLogStdHorizontal, result.ActorLogStdVertical, result.ActorLogStdGripper
@@ -568,16 +643,49 @@ func (r *Runtime) Resume() error {
 func (r *Runtime) Reset() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.status == RuntimeRunning {
-		return errors.New("runtime must be paused before reset")
-	}
+	r.resetGeneration++
+	var resetErrors []error
 	for _, worker := range r.workers {
-		state, err := worker.task.Reset()
-		if err != nil {
-			return err
+		if err := r.resetWorker(worker); err != nil {
+			resetErrors = append(resetErrors, fmt.Errorf("worker %d reset: %w", worker.id, err))
 		}
-		worker.state, worker.episodeID, worker.episodeStep, worker.episodeReward, worker.lastInfo, worker.outcome, worker.actionSource = append(State(nil), state...), worker.episodeID+1, 0, 0, nil, OutcomeRunning, "pending"
 	}
+	if err := errors.Join(resetErrors...); err != nil {
+		r.status, r.lastError = RuntimeError, err.Error()
+		return err
+	}
+	r.lastError = ""
+	if r.status == RuntimeError {
+		if r.done == nil {
+			r.status = RuntimeStopped
+		} else {
+			select {
+			case <-r.done:
+				r.status = RuntimeStopped
+			default:
+				r.status = RuntimeRunning
+			}
+		}
+	}
+	return nil
+}
+
+func (r *Runtime) resetWorker(worker *runtimeWorker) error {
+	state, err := worker.task.Reset()
+	if err != nil {
+		return err
+	}
+	worker.state = append(State(nil), state...)
+	worker.episodeID++
+	worker.episodeStep = 0
+	worker.episodeReward = 0
+	worker.episodePolicyVersion = 0
+	worker.lastAction = nil
+	worker.reflexParameters = nil
+	worker.lastReward = 0
+	worker.lastInfo = nil
+	worker.outcome = OutcomeRunning
+	worker.actionSource = "pending"
 	return nil
 }
 
@@ -666,7 +774,9 @@ func (r *Runtime) Snapshot() RuntimeSnapshot {
 	if r.replay != nil {
 		snapshot.ReplayBufferSize = r.replay.Len()
 	}
-	if r.metrics.totalEpisodes > 0 {
+	if rollingRate := r.rollingSuccessRate(); len(r.metrics.recentEpisodeSuccesses) > 0 {
+		snapshot.SuccessRate = rollingRate
+	} else if r.metrics.totalEpisodes > 0 {
 		snapshot.SuccessRate = float64(r.metrics.successes) / float64(r.metrics.totalEpisodes)
 	}
 	if r.metrics.totalSteps > 0 {
@@ -680,9 +790,31 @@ func (r *Runtime) Snapshot() RuntimeSnapshot {
 		if telemetryTask, ok := worker.task.(TelemetryTask); ok {
 			metadata = telemetryTask.TelemetryMetadata()
 		}
-		snapshot.Workers[i] = WorkerSnapshot{ID: worker.id, EpisodeID: worker.episodeID, EpisodeStep: worker.episodeStep, State: append(State(nil), worker.state...), LastAction: append(Action(nil), worker.lastAction...), LastReward: worker.lastReward, EpisodeReward: worker.episodeReward, PolicyVersion: worker.episodePolicyVersion, Info: cloneInfo(worker.lastInfo), Outcome: worker.outcome, ActionSource: worker.actionSource, Metadata: metadata}
+		snapshot.Workers[i] = WorkerSnapshot{ID: worker.id, EpisodeID: worker.episodeID, EpisodeStep: worker.episodeStep, State: append(State(nil), worker.state...), LastAction: append(Action(nil), worker.lastAction...), LastReward: worker.lastReward, EpisodeReward: worker.episodeReward, PolicyVersion: worker.episodePolicyVersion, Info: cloneInfo(worker.lastInfo), Outcome: worker.outcome, ActionSource: worker.actionSource, ReflexParameters: append([]ReflexParameterValue(nil), worker.reflexParameters...), Metadata: metadata}
 	}
 	return snapshot
+}
+
+func (r *Runtime) rollingSuccessRate() float64 {
+	if len(r.metrics.recentEpisodeSuccesses) == 0 {
+		return 0
+	}
+	successes := 0
+	for _, succeeded := range r.metrics.recentEpisodeSuccesses {
+		if succeeded {
+			successes++
+		}
+	}
+	return float64(successes) / float64(len(r.metrics.recentEpisodeSuccesses))
+}
+
+func (r *Runtime) recordEpisodeOutcome(succeeded bool) {
+	if len(r.metrics.recentEpisodeSuccesses) < rollingSuccessWindowEpisodes {
+		r.metrics.recentEpisodeSuccesses = append(r.metrics.recentEpisodeSuccesses, succeeded)
+		return
+	}
+	r.metrics.recentEpisodeSuccesses[r.metrics.recentEpisodeIndex] = succeeded
+	r.metrics.recentEpisodeIndex = (r.metrics.recentEpisodeIndex + 1) % rollingSuccessWindowEpisodes
 }
 
 func (r *Runtime) actionStatistics() ActionStatistics {

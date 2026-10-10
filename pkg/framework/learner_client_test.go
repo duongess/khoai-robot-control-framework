@@ -19,18 +19,20 @@ type learnerServiceStub struct {
 	predictRequest *learnerv1.PredictBatchRequest
 	trainRequest   *learnerv1.TrainBatchRequest
 	saveRequest    *learnerv1.SaveCheckpointRequest
+	episodeRequest *learnerv1.RecordEpisodeResultRequest
 }
 
 func (s *learnerServiceStub) HealthCheck(context.Context, *learnerv1.HealthCheckRequest) (*learnerv1.HealthCheckResponse, error) {
-	return &learnerv1.HealthCheckResponse{Ready: true}, nil
+	return &learnerv1.HealthCheckResponse{Ready: true, ModelName: "dense-v1", ControllerType: "parametric_mlp", ActiveModelName: "Parametric MLP (Dense)"}, nil
 }
 
 func (s *learnerServiceStub) PredictBatch(_ context.Context, request *learnerv1.PredictBatchRequest) (*learnerv1.PredictBatchResponse, error) {
 	s.predictRequest = request
 	return &learnerv1.PredictBatchResponse{
-		Actions:         []*learnerv1.Action{{Values: []float32{0.5}}, {Values: []float32{0.5}}},
-		FlyBaseActions:  []*learnerv1.Action{{Values: []float32{0.3}}, {Values: []float32{0.3}}},
-		ResidualActions: []*learnerv1.Action{{Values: []float32{0.2}}, {Values: []float32{0.2}}},
+		Actions:          []*learnerv1.Action{{Values: []float32{0.5}}, {Values: []float32{0.5}}},
+		FlyBaseActions:   []*learnerv1.Action{{Values: []float32{0.3}}, {Values: []float32{0.3}}},
+		ResidualActions:  []*learnerv1.Action{{Values: []float32{0.2}}, {Values: []float32{0.2}}},
+		ReflexParameters: []*learnerv1.ReflexParameter{{Name: "vertical.a", Values: []float32{-0.8, -0.7}, MinValue: -1, MaxValue: 1, DefaultValue: -0.5}},
 	}, nil
 }
 
@@ -44,6 +46,11 @@ func (s *learnerServiceStub) SaveCheckpoint(_ context.Context, request *learnerv
 	return &learnerv1.SaveCheckpointResponse{ModelName: "grasp-v1", PolicyVersion: 11, TrainingStep: 23}, nil
 }
 
+func (s *learnerServiceStub) RecordEpisodeResult(_ context.Context, request *learnerv1.RecordEpisodeResultRequest) (*learnerv1.RecordEpisodeResultResponse, error) {
+	s.episodeRequest = request
+	return &learnerv1.RecordEpisodeResultResponse{StopTraining: true, CompletedEpisodes: 20, RollingSuccessRate: 1, ConsecutiveSuccesses: 20, Reason: "consecutive_successes"}, nil
+}
+
 func TestLearnerClientHealthCheck(t *testing.T) {
 	client, _ := newTestLearnerClient(t)
 
@@ -53,6 +60,9 @@ func TestLearnerClientHealthCheck(t *testing.T) {
 	}
 	if !health.Ready {
 		t.Fatal("HealthCheck() ready = false")
+	}
+	if health.ModelName != "dense-v1" || health.ControllerType != "parametric_mlp" || health.ActiveModelName != "Parametric MLP (Dense)" {
+		t.Fatalf("HealthCheck() identity = %#v", health)
 	}
 }
 
@@ -74,6 +84,9 @@ func TestLearnerClientPredictBatchMapsStatesAndActions(t *testing.T) {
 	}
 	if len(prediction.FlyBaseActions) != 2 || prediction.FlyBaseActions[0][0] != 0.3 || len(prediction.ResidualActions) != 2 || prediction.ResidualActions[0][0] != 0.2 {
 		t.Fatalf("PredictBatch() decomposition = base %#v residual %#v", prediction.FlyBaseActions, prediction.ResidualActions)
+	}
+	if len(prediction.ReflexParameters) != 1 || prediction.ReflexParameters[0].Name != "vertical.a" || prediction.ReflexParameters[0].Values[1] != -0.7 {
+		t.Fatalf("PredictBatch() reflex parameters = %#v", prediction.ReflexParameters)
 	}
 }
 
@@ -108,6 +121,20 @@ func TestLearnerClientSavesNamedCheckpoint(t *testing.T) {
 	}
 	if result.ModelName != "grasp-v1" || result.PolicyVersion != 11 || result.TrainingStep != 23 {
 		t.Fatalf("SaveCheckpoint() result = %#v", result)
+	}
+}
+
+func TestLearnerClientReportsCompletedEpisode(t *testing.T) {
+	client, service := newTestLearnerClient(t)
+	result, err := client.RecordEpisodeResult(context.Background(), EpisodeResult{ID: "run-worker-episode", Success: true, Reward: 12.5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if service.episodeRequest.GetEpisodeId() != "run-worker-episode" || !service.episodeRequest.GetSuccess() || service.episodeRequest.GetEpisodeReward() != 12.5 {
+		t.Fatalf("episode request = %#v", service.episodeRequest)
+	}
+	if !result.StopTraining || result.CompletedEpisodes != 20 || result.ConsecutiveSuccesses != 20 || result.Reason != "consecutive_successes" {
+		t.Fatalf("episode result = %#v", result)
 	}
 }
 

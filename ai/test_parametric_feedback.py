@@ -45,6 +45,18 @@ def test_signed_tracking_moves_toward_object_and_seeds_vertical_descent(tmp_path
     assert torch.all(policy.parameter_log_std > policy.min_log_std)
 
 
+def test_residual_head_starts_non_zero_and_explores_vertical_descent(tmp_path) -> None:
+    policy = FlyConnectomePolicy(30, 3, _graph(tmp_path), hidden_dim=8, base_policy="closed_loop")
+    assert torch.linalg.norm(policy.residual_head[-1].weight) > 1e-4
+    assert policy.log_std.mean().item() > -2.0
+
+    observation = torch.zeros((1, 30), dtype=torch.float32)
+    observation[:, 9] = 0.10
+    observation[:, 1] = 0.60
+    _, _, residual, _ = policy.sample_decomposed(observation, deterministic=False)
+    assert residual[0, 1].abs().item() > 1e-6
+
+
 def test_vertical_tracking_rejects_a_bias_range_without_descent_prior(tmp_path) -> None:
     policy = FlyConnectomePolicy(3, 3, _graph(tmp_path), hidden_dim=8)
     with pytest.raises(ValueError, match="safe descent prior"):

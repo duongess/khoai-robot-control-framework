@@ -89,8 +89,12 @@ type PredictBatchResponse struct {
 	// three-dimensional command stored in replay and consumed by the critic.
 	FlyBaseActions  []*Action `protobuf:"bytes,3,rep,name=fly_base_actions,json=flyBaseActions,proto3" json:"fly_base_actions,omitempty"`
 	ResidualActions []*Action `protobuf:"bytes,4,rep,name=residual_actions,json=residualActions,proto3" json:"residual_actions,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// Bounded parameters of the active local reflex law. Each `values` entry
+	// aligns with the corresponding request state. This is diagnostic telemetry:
+	// `actions` remains the sole authoritative actuator command.
+	ReflexParameters []*ReflexParameter `protobuf:"bytes,5,rep,name=reflex_parameters,json=reflexParameters,proto3" json:"reflex_parameters,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *PredictBatchResponse) Reset() {
@@ -151,6 +155,89 @@ func (x *PredictBatchResponse) GetResidualActions() []*Action {
 	return nil
 }
 
+func (x *PredictBatchResponse) GetReflexParameters() []*ReflexParameter {
+	if x != nil {
+		return x.ReflexParameters
+	}
+	return nil
+}
+
+type ReflexParameter struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Values        []float32              `protobuf:"fixed32,2,rep,packed,name=values,proto3" json:"values,omitempty"`
+	MinValue      float32                `protobuf:"fixed32,3,opt,name=min_value,json=minValue,proto3" json:"min_value,omitempty"`
+	MaxValue      float32                `protobuf:"fixed32,4,opt,name=max_value,json=maxValue,proto3" json:"max_value,omitempty"`
+	DefaultValue  float32                `protobuf:"fixed32,5,opt,name=default_value,json=defaultValue,proto3" json:"default_value,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReflexParameter) Reset() {
+	*x = ReflexParameter{}
+	mi := &file_learner_v1_learner_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReflexParameter) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReflexParameter) ProtoMessage() {}
+
+func (x *ReflexParameter) ProtoReflect() protoreflect.Message {
+	mi := &file_learner_v1_learner_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReflexParameter.ProtoReflect.Descriptor instead.
+func (*ReflexParameter) Descriptor() ([]byte, []int) {
+	return file_learner_v1_learner_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *ReflexParameter) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *ReflexParameter) GetValues() []float32 {
+	if x != nil {
+		return x.Values
+	}
+	return nil
+}
+
+func (x *ReflexParameter) GetMinValue() float32 {
+	if x != nil {
+		return x.MinValue
+	}
+	return 0
+}
+
+func (x *ReflexParameter) GetMaxValue() float32 {
+	if x != nil {
+		return x.MaxValue
+	}
+	return 0
+}
+
+func (x *ReflexParameter) GetDefaultValue() float32 {
+	if x != nil {
+		return x.DefaultValue
+	}
+	return 0
+}
+
 type TrainBatchRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Batch         *TransitionBatch       `protobuf:"bytes,1,opt,name=batch,proto3" json:"batch,omitempty"`
@@ -161,7 +248,7 @@ type TrainBatchRequest struct {
 
 func (x *TrainBatchRequest) Reset() {
 	*x = TrainBatchRequest{}
-	mi := &file_learner_v1_learner_proto_msgTypes[2]
+	mi := &file_learner_v1_learner_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -173,7 +260,7 @@ func (x *TrainBatchRequest) String() string {
 func (*TrainBatchRequest) ProtoMessage() {}
 
 func (x *TrainBatchRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_learner_v1_learner_proto_msgTypes[2]
+	mi := &file_learner_v1_learner_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -186,7 +273,7 @@ func (x *TrainBatchRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TrainBatchRequest.ProtoReflect.Descriptor instead.
 func (*TrainBatchRequest) Descriptor() ([]byte, []int) {
-	return file_learner_v1_learner_proto_rawDescGZIP(), []int{2}
+	return file_learner_v1_learner_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *TrainBatchRequest) GetBatch() *TransitionBatch {
@@ -225,7 +312,7 @@ type TrainBatchResponse struct {
 
 func (x *TrainBatchResponse) Reset() {
 	*x = TrainBatchResponse{}
-	mi := &file_learner_v1_learner_proto_msgTypes[3]
+	mi := &file_learner_v1_learner_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -237,7 +324,7 @@ func (x *TrainBatchResponse) String() string {
 func (*TrainBatchResponse) ProtoMessage() {}
 
 func (x *TrainBatchResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_learner_v1_learner_proto_msgTypes[3]
+	mi := &file_learner_v1_learner_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -250,7 +337,7 @@ func (x *TrainBatchResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TrainBatchResponse.ProtoReflect.Descriptor instead.
 func (*TrainBatchResponse) Descriptor() ([]byte, []int) {
-	return file_learner_v1_learner_proto_rawDescGZIP(), []int{3}
+	return file_learner_v1_learner_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *TrainBatchResponse) GetAccepted() bool {
@@ -359,7 +446,7 @@ type HealthCheckRequest struct {
 
 func (x *HealthCheckRequest) Reset() {
 	*x = HealthCheckRequest{}
-	mi := &file_learner_v1_learner_proto_msgTypes[4]
+	mi := &file_learner_v1_learner_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -371,7 +458,7 @@ func (x *HealthCheckRequest) String() string {
 func (*HealthCheckRequest) ProtoMessage() {}
 
 func (x *HealthCheckRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_learner_v1_learner_proto_msgTypes[4]
+	mi := &file_learner_v1_learner_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -384,7 +471,7 @@ func (x *HealthCheckRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HealthCheckRequest.ProtoReflect.Descriptor instead.
 func (*HealthCheckRequest) Descriptor() ([]byte, []int) {
-	return file_learner_v1_learner_proto_rawDescGZIP(), []int{4}
+	return file_learner_v1_learner_proto_rawDescGZIP(), []int{5}
 }
 
 type HealthCheckResponse struct {
@@ -394,14 +481,20 @@ type HealthCheckResponse struct {
 	TrainingStep  uint64                 `protobuf:"varint,3,opt,name=training_step,json=trainingStep,proto3" json:"training_step,omitempty"`
 	Device        string                 `protobuf:"bytes,4,opt,name=device,proto3" json:"device,omitempty"`
 	// Empty when this process is a new, unsaved learner.
-	ModelName     string `protobuf:"bytes,5,opt,name=model_name,json=modelName,proto3" json:"model_name,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	ModelName string `protobuf:"bytes,5,opt,name=model_name,json=modelName,proto3" json:"model_name,omitempty"`
+	// Immutable architecture selected when the learner process starts. A
+	// dashboard may display this value but must never use it to select an actor.
+	ControllerType string `protobuf:"bytes,6,opt,name=controller_type,json=controllerType,proto3" json:"controller_type,omitempty"`
+	// Human-readable architecture label for operator telemetry, for example
+	// "Parametric MLP (Dense)" or "Fly Connectome (Sparse)".
+	ActiveModelName string `protobuf:"bytes,7,opt,name=active_model_name,json=activeModelName,proto3" json:"active_model_name,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *HealthCheckResponse) Reset() {
 	*x = HealthCheckResponse{}
-	mi := &file_learner_v1_learner_proto_msgTypes[5]
+	mi := &file_learner_v1_learner_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -413,7 +506,7 @@ func (x *HealthCheckResponse) String() string {
 func (*HealthCheckResponse) ProtoMessage() {}
 
 func (x *HealthCheckResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_learner_v1_learner_proto_msgTypes[5]
+	mi := &file_learner_v1_learner_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -426,7 +519,7 @@ func (x *HealthCheckResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HealthCheckResponse.ProtoReflect.Descriptor instead.
 func (*HealthCheckResponse) Descriptor() ([]byte, []int) {
-	return file_learner_v1_learner_proto_rawDescGZIP(), []int{5}
+	return file_learner_v1_learner_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *HealthCheckResponse) GetReady() bool {
@@ -464,6 +557,20 @@ func (x *HealthCheckResponse) GetModelName() string {
 	return ""
 }
 
+func (x *HealthCheckResponse) GetControllerType() string {
+	if x != nil {
+		return x.ControllerType
+	}
+	return ""
+}
+
+func (x *HealthCheckResponse) GetActiveModelName() string {
+	if x != nil {
+		return x.ActiveModelName
+	}
+	return ""
+}
+
 // SaveCheckpoint persists the complete SAC training state under the learner's
 // active CLI model name (`python -m ai <name>`), overwriting that name only.
 // Keeping the request empty prevents a dashboard from selecting a filesystem
@@ -476,7 +583,7 @@ type SaveCheckpointRequest struct {
 
 func (x *SaveCheckpointRequest) Reset() {
 	*x = SaveCheckpointRequest{}
-	mi := &file_learner_v1_learner_proto_msgTypes[6]
+	mi := &file_learner_v1_learner_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -488,7 +595,7 @@ func (x *SaveCheckpointRequest) String() string {
 func (*SaveCheckpointRequest) ProtoMessage() {}
 
 func (x *SaveCheckpointRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_learner_v1_learner_proto_msgTypes[6]
+	mi := &file_learner_v1_learner_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -501,7 +608,7 @@ func (x *SaveCheckpointRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SaveCheckpointRequest.ProtoReflect.Descriptor instead.
 func (*SaveCheckpointRequest) Descriptor() ([]byte, []int) {
-	return file_learner_v1_learner_proto_rawDescGZIP(), []int{6}
+	return file_learner_v1_learner_proto_rawDescGZIP(), []int{7}
 }
 
 type SaveCheckpointResponse struct {
@@ -515,7 +622,7 @@ type SaveCheckpointResponse struct {
 
 func (x *SaveCheckpointResponse) Reset() {
 	*x = SaveCheckpointResponse{}
-	mi := &file_learner_v1_learner_proto_msgTypes[7]
+	mi := &file_learner_v1_learner_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -527,7 +634,7 @@ func (x *SaveCheckpointResponse) String() string {
 func (*SaveCheckpointResponse) ProtoMessage() {}
 
 func (x *SaveCheckpointResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_learner_v1_learner_proto_msgTypes[7]
+	mi := &file_learner_v1_learner_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -540,7 +647,7 @@ func (x *SaveCheckpointResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SaveCheckpointResponse.ProtoReflect.Descriptor instead.
 func (*SaveCheckpointResponse) Descriptor() ([]byte, []int) {
-	return file_learner_v1_learner_proto_rawDescGZIP(), []int{7}
+	return file_learner_v1_learner_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *SaveCheckpointResponse) GetModelName() string {
@@ -564,6 +671,145 @@ func (x *SaveCheckpointResponse) GetTrainingStep() uint64 {
 	return 0
 }
 
+// Report one completed environment episode when it happens. Replay samples
+// cannot be used for stopping because terminal transitions are sampled late
+// and may never be sampled at all.
+type RecordEpisodeResultRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	EpisodeId     string                 `protobuf:"bytes,1,opt,name=episode_id,json=episodeId,proto3" json:"episode_id,omitempty"`
+	Success       bool                   `protobuf:"varint,2,opt,name=success,proto3" json:"success,omitempty"`
+	EpisodeReward float32                `protobuf:"fixed32,3,opt,name=episode_reward,json=episodeReward,proto3" json:"episode_reward,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RecordEpisodeResultRequest) Reset() {
+	*x = RecordEpisodeResultRequest{}
+	mi := &file_learner_v1_learner_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RecordEpisodeResultRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RecordEpisodeResultRequest) ProtoMessage() {}
+
+func (x *RecordEpisodeResultRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_learner_v1_learner_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RecordEpisodeResultRequest.ProtoReflect.Descriptor instead.
+func (*RecordEpisodeResultRequest) Descriptor() ([]byte, []int) {
+	return file_learner_v1_learner_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *RecordEpisodeResultRequest) GetEpisodeId() string {
+	if x != nil {
+		return x.EpisodeId
+	}
+	return ""
+}
+
+func (x *RecordEpisodeResultRequest) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *RecordEpisodeResultRequest) GetEpisodeReward() float32 {
+	if x != nil {
+		return x.EpisodeReward
+	}
+	return 0
+}
+
+type RecordEpisodeResultResponse struct {
+	state                protoimpl.MessageState `protogen:"open.v1"`
+	StopTraining         bool                   `protobuf:"varint,1,opt,name=stop_training,json=stopTraining,proto3" json:"stop_training,omitempty"`
+	CompletedEpisodes    uint64                 `protobuf:"varint,2,opt,name=completed_episodes,json=completedEpisodes,proto3" json:"completed_episodes,omitempty"`
+	RollingSuccessRate   float32                `protobuf:"fixed32,3,opt,name=rolling_success_rate,json=rollingSuccessRate,proto3" json:"rolling_success_rate,omitempty"`
+	ConsecutiveSuccesses uint64                 `protobuf:"varint,4,opt,name=consecutive_successes,json=consecutiveSuccesses,proto3" json:"consecutive_successes,omitempty"`
+	Reason               string                 `protobuf:"bytes,5,opt,name=reason,proto3" json:"reason,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
+}
+
+func (x *RecordEpisodeResultResponse) Reset() {
+	*x = RecordEpisodeResultResponse{}
+	mi := &file_learner_v1_learner_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RecordEpisodeResultResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RecordEpisodeResultResponse) ProtoMessage() {}
+
+func (x *RecordEpisodeResultResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_learner_v1_learner_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RecordEpisodeResultResponse.ProtoReflect.Descriptor instead.
+func (*RecordEpisodeResultResponse) Descriptor() ([]byte, []int) {
+	return file_learner_v1_learner_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *RecordEpisodeResultResponse) GetStopTraining() bool {
+	if x != nil {
+		return x.StopTraining
+	}
+	return false
+}
+
+func (x *RecordEpisodeResultResponse) GetCompletedEpisodes() uint64 {
+	if x != nil {
+		return x.CompletedEpisodes
+	}
+	return 0
+}
+
+func (x *RecordEpisodeResultResponse) GetRollingSuccessRate() float32 {
+	if x != nil {
+		return x.RollingSuccessRate
+	}
+	return 0
+}
+
+func (x *RecordEpisodeResultResponse) GetConsecutiveSuccesses() uint64 {
+	if x != nil {
+		return x.ConsecutiveSuccesses
+	}
+	return 0
+}
+
+func (x *RecordEpisodeResultResponse) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
 var File_learner_v1_learner_proto protoreflect.FileDescriptor
 
 const file_learner_v1_learner_proto_rawDesc = "" +
@@ -573,12 +819,19 @@ const file_learner_v1_learner_proto_rawDesc = "" +
 	"\x13PredictBatchRequest\x12C\n" +
 	"\venvironment\x18\x01 \x01(\v2!.learner.v1.EnvironmentDescriptorR\venvironment\x12)\n" +
 	"\x06states\x18\x02 \x03(\v2\x11.learner.v1.StateR\x06states\x12%\n" +
-	"\x0epolicy_version\x18\x03 \x01(\x04R\rpolicyVersion\"\xe8\x01\n" +
+	"\x0epolicy_version\x18\x03 \x01(\x04R\rpolicyVersion\"\xb2\x02\n" +
 	"\x14PredictBatchResponse\x12,\n" +
 	"\aactions\x18\x01 \x03(\v2\x12.learner.v1.ActionR\aactions\x12%\n" +
 	"\x0epolicy_version\x18\x02 \x01(\x04R\rpolicyVersion\x12<\n" +
 	"\x10fly_base_actions\x18\x03 \x03(\v2\x12.learner.v1.ActionR\x0eflyBaseActions\x12=\n" +
-	"\x10residual_actions\x18\x04 \x03(\v2\x12.learner.v1.ActionR\x0fresidualActions\"m\n" +
+	"\x10residual_actions\x18\x04 \x03(\v2\x12.learner.v1.ActionR\x0fresidualActions\x12H\n" +
+	"\x11reflex_parameters\x18\x05 \x03(\v2\x1b.learner.v1.ReflexParameterR\x10reflexParameters\"\x9c\x01\n" +
+	"\x0fReflexParameter\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x16\n" +
+	"\x06values\x18\x02 \x03(\x02R\x06values\x12\x1b\n" +
+	"\tmin_value\x18\x03 \x01(\x02R\bminValue\x12\x1b\n" +
+	"\tmax_value\x18\x04 \x01(\x02R\bmaxValue\x12#\n" +
+	"\rdefault_value\x18\x05 \x01(\x02R\fdefaultValue\"m\n" +
 	"\x11TrainBatchRequest\x121\n" +
 	"\x05batch\x18\x01 \x01(\v2\x1b.learner.v1.TransitionBatchR\x05batch\x12%\n" +
 	"\x0epolicy_version\x18\x02 \x01(\x04R\rpolicyVersion\"\x93\x04\n" +
@@ -603,26 +856,40 @@ const file_learner_v1_learner_proto_rawDesc = "" +
 	"\x18actor_log_std_horizontal\x18\f \x01(\x02R\x15actorLogStdHorizontal\x123\n" +
 	"\x16actor_log_std_vertical\x18\r \x01(\x02R\x13actorLogStdVertical\x121\n" +
 	"\x15actor_log_std_gripper\x18\x0e \x01(\x02R\x12actorLogStdGripper\"\x14\n" +
-	"\x12HealthCheckRequest\"\xae\x01\n" +
+	"\x12HealthCheckRequest\"\x83\x02\n" +
 	"\x13HealthCheckResponse\x12\x14\n" +
 	"\x05ready\x18\x01 \x01(\bR\x05ready\x12%\n" +
 	"\x0epolicy_version\x18\x02 \x01(\x04R\rpolicyVersion\x12#\n" +
 	"\rtraining_step\x18\x03 \x01(\x04R\ftrainingStep\x12\x16\n" +
 	"\x06device\x18\x04 \x01(\tR\x06device\x12\x1d\n" +
 	"\n" +
-	"model_name\x18\x05 \x01(\tR\tmodelName\"\x17\n" +
+	"model_name\x18\x05 \x01(\tR\tmodelName\x12'\n" +
+	"\x0fcontroller_type\x18\x06 \x01(\tR\x0econtrollerType\x12*\n" +
+	"\x11active_model_name\x18\a \x01(\tR\x0factiveModelName\"\x17\n" +
 	"\x15SaveCheckpointRequest\"\x83\x01\n" +
 	"\x16SaveCheckpointResponse\x12\x1d\n" +
 	"\n" +
 	"model_name\x18\x01 \x01(\tR\tmodelName\x12%\n" +
 	"\x0epolicy_version\x18\x02 \x01(\x04R\rpolicyVersion\x12#\n" +
-	"\rtraining_step\x18\x03 \x01(\x04R\ftrainingStep2\xd9\x02\n" +
+	"\rtraining_step\x18\x03 \x01(\x04R\ftrainingStep\"|\n" +
+	"\x1aRecordEpisodeResultRequest\x12\x1d\n" +
+	"\n" +
+	"episode_id\x18\x01 \x01(\tR\tepisodeId\x12\x18\n" +
+	"\asuccess\x18\x02 \x01(\bR\asuccess\x12%\n" +
+	"\x0eepisode_reward\x18\x03 \x01(\x02R\repisodeReward\"\xf0\x01\n" +
+	"\x1bRecordEpisodeResultResponse\x12#\n" +
+	"\rstop_training\x18\x01 \x01(\bR\fstopTraining\x12-\n" +
+	"\x12completed_episodes\x18\x02 \x01(\x04R\x11completedEpisodes\x120\n" +
+	"\x14rolling_success_rate\x18\x03 \x01(\x02R\x12rollingSuccessRate\x123\n" +
+	"\x15consecutive_successes\x18\x04 \x01(\x04R\x14consecutiveSuccesses\x12\x16\n" +
+	"\x06reason\x18\x05 \x01(\tR\x06reason2\xc1\x03\n" +
 	"\x0eLearnerService\x12Q\n" +
 	"\fPredictBatch\x12\x1f.learner.v1.PredictBatchRequest\x1a .learner.v1.PredictBatchResponse\x12K\n" +
 	"\n" +
 	"TrainBatch\x12\x1d.learner.v1.TrainBatchRequest\x1a\x1e.learner.v1.TrainBatchResponse\x12N\n" +
 	"\vHealthCheck\x12\x1e.learner.v1.HealthCheckRequest\x1a\x1f.learner.v1.HealthCheckResponse\x12W\n" +
-	"\x0eSaveCheckpoint\x12!.learner.v1.SaveCheckpointRequest\x1a\".learner.v1.SaveCheckpointResponseBOZMgithub.com/duongess/khoai-robot-control-framework/gen/go/learner/v1;learnerv1b\x06proto3"
+	"\x0eSaveCheckpoint\x12!.learner.v1.SaveCheckpointRequest\x1a\".learner.v1.SaveCheckpointResponse\x12f\n" +
+	"\x13RecordEpisodeResult\x12&.learner.v1.RecordEpisodeResultRequest\x1a'.learner.v1.RecordEpisodeResultResponseBOZMgithub.com/duongess/khoai-robot-control-framework/gen/go/learner/v1;learnerv1b\x06proto3"
 
 var (
 	file_learner_v1_learner_proto_rawDescOnce sync.Once
@@ -636,41 +903,47 @@ func file_learner_v1_learner_proto_rawDescGZIP() []byte {
 	return file_learner_v1_learner_proto_rawDescData
 }
 
-var file_learner_v1_learner_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
+var file_learner_v1_learner_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
 var file_learner_v1_learner_proto_goTypes = []any{
-	(*PredictBatchRequest)(nil),    // 0: learner.v1.PredictBatchRequest
-	(*PredictBatchResponse)(nil),   // 1: learner.v1.PredictBatchResponse
-	(*TrainBatchRequest)(nil),      // 2: learner.v1.TrainBatchRequest
-	(*TrainBatchResponse)(nil),     // 3: learner.v1.TrainBatchResponse
-	(*HealthCheckRequest)(nil),     // 4: learner.v1.HealthCheckRequest
-	(*HealthCheckResponse)(nil),    // 5: learner.v1.HealthCheckResponse
-	(*SaveCheckpointRequest)(nil),  // 6: learner.v1.SaveCheckpointRequest
-	(*SaveCheckpointResponse)(nil), // 7: learner.v1.SaveCheckpointResponse
-	(*EnvironmentDescriptor)(nil),  // 8: learner.v1.EnvironmentDescriptor
-	(*State)(nil),                  // 9: learner.v1.State
-	(*Action)(nil),                 // 10: learner.v1.Action
-	(*TransitionBatch)(nil),        // 11: learner.v1.TransitionBatch
+	(*PredictBatchRequest)(nil),         // 0: learner.v1.PredictBatchRequest
+	(*PredictBatchResponse)(nil),        // 1: learner.v1.PredictBatchResponse
+	(*ReflexParameter)(nil),             // 2: learner.v1.ReflexParameter
+	(*TrainBatchRequest)(nil),           // 3: learner.v1.TrainBatchRequest
+	(*TrainBatchResponse)(nil),          // 4: learner.v1.TrainBatchResponse
+	(*HealthCheckRequest)(nil),          // 5: learner.v1.HealthCheckRequest
+	(*HealthCheckResponse)(nil),         // 6: learner.v1.HealthCheckResponse
+	(*SaveCheckpointRequest)(nil),       // 7: learner.v1.SaveCheckpointRequest
+	(*SaveCheckpointResponse)(nil),      // 8: learner.v1.SaveCheckpointResponse
+	(*RecordEpisodeResultRequest)(nil),  // 9: learner.v1.RecordEpisodeResultRequest
+	(*RecordEpisodeResultResponse)(nil), // 10: learner.v1.RecordEpisodeResultResponse
+	(*EnvironmentDescriptor)(nil),       // 11: learner.v1.EnvironmentDescriptor
+	(*State)(nil),                       // 12: learner.v1.State
+	(*Action)(nil),                      // 13: learner.v1.Action
+	(*TransitionBatch)(nil),             // 14: learner.v1.TransitionBatch
 }
 var file_learner_v1_learner_proto_depIdxs = []int32{
-	8,  // 0: learner.v1.PredictBatchRequest.environment:type_name -> learner.v1.EnvironmentDescriptor
-	9,  // 1: learner.v1.PredictBatchRequest.states:type_name -> learner.v1.State
-	10, // 2: learner.v1.PredictBatchResponse.actions:type_name -> learner.v1.Action
-	10, // 3: learner.v1.PredictBatchResponse.fly_base_actions:type_name -> learner.v1.Action
-	10, // 4: learner.v1.PredictBatchResponse.residual_actions:type_name -> learner.v1.Action
-	11, // 5: learner.v1.TrainBatchRequest.batch:type_name -> learner.v1.TransitionBatch
-	0,  // 6: learner.v1.LearnerService.PredictBatch:input_type -> learner.v1.PredictBatchRequest
-	2,  // 7: learner.v1.LearnerService.TrainBatch:input_type -> learner.v1.TrainBatchRequest
-	4,  // 8: learner.v1.LearnerService.HealthCheck:input_type -> learner.v1.HealthCheckRequest
-	6,  // 9: learner.v1.LearnerService.SaveCheckpoint:input_type -> learner.v1.SaveCheckpointRequest
-	1,  // 10: learner.v1.LearnerService.PredictBatch:output_type -> learner.v1.PredictBatchResponse
-	3,  // 11: learner.v1.LearnerService.TrainBatch:output_type -> learner.v1.TrainBatchResponse
-	5,  // 12: learner.v1.LearnerService.HealthCheck:output_type -> learner.v1.HealthCheckResponse
-	7,  // 13: learner.v1.LearnerService.SaveCheckpoint:output_type -> learner.v1.SaveCheckpointResponse
-	10, // [10:14] is the sub-list for method output_type
-	6,  // [6:10] is the sub-list for method input_type
-	6,  // [6:6] is the sub-list for extension type_name
-	6,  // [6:6] is the sub-list for extension extendee
-	0,  // [0:6] is the sub-list for field type_name
+	11, // 0: learner.v1.PredictBatchRequest.environment:type_name -> learner.v1.EnvironmentDescriptor
+	12, // 1: learner.v1.PredictBatchRequest.states:type_name -> learner.v1.State
+	13, // 2: learner.v1.PredictBatchResponse.actions:type_name -> learner.v1.Action
+	13, // 3: learner.v1.PredictBatchResponse.fly_base_actions:type_name -> learner.v1.Action
+	13, // 4: learner.v1.PredictBatchResponse.residual_actions:type_name -> learner.v1.Action
+	2,  // 5: learner.v1.PredictBatchResponse.reflex_parameters:type_name -> learner.v1.ReflexParameter
+	14, // 6: learner.v1.TrainBatchRequest.batch:type_name -> learner.v1.TransitionBatch
+	0,  // 7: learner.v1.LearnerService.PredictBatch:input_type -> learner.v1.PredictBatchRequest
+	3,  // 8: learner.v1.LearnerService.TrainBatch:input_type -> learner.v1.TrainBatchRequest
+	5,  // 9: learner.v1.LearnerService.HealthCheck:input_type -> learner.v1.HealthCheckRequest
+	7,  // 10: learner.v1.LearnerService.SaveCheckpoint:input_type -> learner.v1.SaveCheckpointRequest
+	9,  // 11: learner.v1.LearnerService.RecordEpisodeResult:input_type -> learner.v1.RecordEpisodeResultRequest
+	1,  // 12: learner.v1.LearnerService.PredictBatch:output_type -> learner.v1.PredictBatchResponse
+	4,  // 13: learner.v1.LearnerService.TrainBatch:output_type -> learner.v1.TrainBatchResponse
+	6,  // 14: learner.v1.LearnerService.HealthCheck:output_type -> learner.v1.HealthCheckResponse
+	8,  // 15: learner.v1.LearnerService.SaveCheckpoint:output_type -> learner.v1.SaveCheckpointResponse
+	10, // 16: learner.v1.LearnerService.RecordEpisodeResult:output_type -> learner.v1.RecordEpisodeResultResponse
+	12, // [12:17] is the sub-list for method output_type
+	7,  // [7:12] is the sub-list for method input_type
+	7,  // [7:7] is the sub-list for extension type_name
+	7,  // [7:7] is the sub-list for extension extendee
+	0,  // [0:7] is the sub-list for field type_name
 }
 
 func init() { file_learner_v1_learner_proto_init() }
@@ -686,7 +959,7 @@ func file_learner_v1_learner_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_learner_v1_learner_proto_rawDesc), len(file_learner_v1_learner_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   8,
+			NumMessages:   11,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

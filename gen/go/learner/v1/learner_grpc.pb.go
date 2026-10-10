@@ -19,10 +19,11 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	LearnerService_PredictBatch_FullMethodName   = "/learner.v1.LearnerService/PredictBatch"
-	LearnerService_TrainBatch_FullMethodName     = "/learner.v1.LearnerService/TrainBatch"
-	LearnerService_HealthCheck_FullMethodName    = "/learner.v1.LearnerService/HealthCheck"
-	LearnerService_SaveCheckpoint_FullMethodName = "/learner.v1.LearnerService/SaveCheckpoint"
+	LearnerService_PredictBatch_FullMethodName        = "/learner.v1.LearnerService/PredictBatch"
+	LearnerService_TrainBatch_FullMethodName          = "/learner.v1.LearnerService/TrainBatch"
+	LearnerService_HealthCheck_FullMethodName         = "/learner.v1.LearnerService/HealthCheck"
+	LearnerService_SaveCheckpoint_FullMethodName      = "/learner.v1.LearnerService/SaveCheckpoint"
+	LearnerService_RecordEpisodeResult_FullMethodName = "/learner.v1.LearnerService/RecordEpisodeResult"
 )
 
 // LearnerServiceClient is the client API for LearnerService service.
@@ -33,6 +34,7 @@ type LearnerServiceClient interface {
 	TrainBatch(ctx context.Context, in *TrainBatchRequest, opts ...grpc.CallOption) (*TrainBatchResponse, error)
 	HealthCheck(ctx context.Context, in *HealthCheckRequest, opts ...grpc.CallOption) (*HealthCheckResponse, error)
 	SaveCheckpoint(ctx context.Context, in *SaveCheckpointRequest, opts ...grpc.CallOption) (*SaveCheckpointResponse, error)
+	RecordEpisodeResult(ctx context.Context, in *RecordEpisodeResultRequest, opts ...grpc.CallOption) (*RecordEpisodeResultResponse, error)
 }
 
 type learnerServiceClient struct {
@@ -83,6 +85,16 @@ func (c *learnerServiceClient) SaveCheckpoint(ctx context.Context, in *SaveCheck
 	return out, nil
 }
 
+func (c *learnerServiceClient) RecordEpisodeResult(ctx context.Context, in *RecordEpisodeResultRequest, opts ...grpc.CallOption) (*RecordEpisodeResultResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RecordEpisodeResultResponse)
+	err := c.cc.Invoke(ctx, LearnerService_RecordEpisodeResult_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // LearnerServiceServer is the server API for LearnerService service.
 // All implementations must embed UnimplementedLearnerServiceServer
 // for forward compatibility.
@@ -91,6 +103,7 @@ type LearnerServiceServer interface {
 	TrainBatch(context.Context, *TrainBatchRequest) (*TrainBatchResponse, error)
 	HealthCheck(context.Context, *HealthCheckRequest) (*HealthCheckResponse, error)
 	SaveCheckpoint(context.Context, *SaveCheckpointRequest) (*SaveCheckpointResponse, error)
+	RecordEpisodeResult(context.Context, *RecordEpisodeResultRequest) (*RecordEpisodeResultResponse, error)
 	mustEmbedUnimplementedLearnerServiceServer()
 }
 
@@ -112,6 +125,9 @@ func (UnimplementedLearnerServiceServer) HealthCheck(context.Context, *HealthChe
 }
 func (UnimplementedLearnerServiceServer) SaveCheckpoint(context.Context, *SaveCheckpointRequest) (*SaveCheckpointResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SaveCheckpoint not implemented")
+}
+func (UnimplementedLearnerServiceServer) RecordEpisodeResult(context.Context, *RecordEpisodeResultRequest) (*RecordEpisodeResultResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RecordEpisodeResult not implemented")
 }
 func (UnimplementedLearnerServiceServer) mustEmbedUnimplementedLearnerServiceServer() {}
 func (UnimplementedLearnerServiceServer) testEmbeddedByValue()                        {}
@@ -206,6 +222,24 @@ func _LearnerService_SaveCheckpoint_Handler(srv interface{}, ctx context.Context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _LearnerService_RecordEpisodeResult_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RecordEpisodeResultRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(LearnerServiceServer).RecordEpisodeResult(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: LearnerService_RecordEpisodeResult_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(LearnerServiceServer).RecordEpisodeResult(ctx, req.(*RecordEpisodeResultRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // LearnerService_ServiceDesc is the grpc.ServiceDesc for LearnerService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -228,6 +262,10 @@ var LearnerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SaveCheckpoint",
 			Handler:    _LearnerService_SaveCheckpoint_Handler,
+		},
+		{
+			MethodName: "RecordEpisodeResult",
+			Handler:    _LearnerService_RecordEpisodeResult_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

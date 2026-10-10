@@ -20,6 +20,7 @@ type Runtime struct {
 	learner        Learner
 	activeTaskName string
 	workers        []*runtimeWorker
+	runID          uint64
 	replay         *ReplayBuffer
 	status         RuntimeStatus
 	cancel         context.CancelFunc
@@ -29,7 +30,9 @@ type Runtime struct {
 	// unbounded queue of expensive learner updates. Prediction remains on the
 	// control path; a later cycle schedules the next update after this one ends.
 	trainingInFlight bool
-	lastError      string
+	trainingStopped  bool
+	resetGeneration  uint64
+	lastError        string
 }
 
 // NewRuntime creates an empty task runtime.

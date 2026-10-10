@@ -19,16 +19,32 @@ class PredictBatchRequest(_message.Message):
     def __init__(self, environment: _Optional[_Union[_environment_pb2.EnvironmentDescriptor, _Mapping]] = ..., states: _Optional[_Iterable[_Union[_environment_pb2.State, _Mapping]]] = ..., policy_version: _Optional[int] = ...) -> None: ...
 
 class PredictBatchResponse(_message.Message):
-    __slots__ = ("actions", "policy_version", "fly_base_actions", "residual_actions")
+    __slots__ = ("actions", "policy_version", "fly_base_actions", "residual_actions", "reflex_parameters")
     ACTIONS_FIELD_NUMBER: _ClassVar[int]
     POLICY_VERSION_FIELD_NUMBER: _ClassVar[int]
     FLY_BASE_ACTIONS_FIELD_NUMBER: _ClassVar[int]
     RESIDUAL_ACTIONS_FIELD_NUMBER: _ClassVar[int]
+    REFLEX_PARAMETERS_FIELD_NUMBER: _ClassVar[int]
     actions: _containers.RepeatedCompositeFieldContainer[_environment_pb2.Action]
     policy_version: int
     fly_base_actions: _containers.RepeatedCompositeFieldContainer[_environment_pb2.Action]
     residual_actions: _containers.RepeatedCompositeFieldContainer[_environment_pb2.Action]
-    def __init__(self, actions: _Optional[_Iterable[_Union[_environment_pb2.Action, _Mapping]]] = ..., policy_version: _Optional[int] = ..., fly_base_actions: _Optional[_Iterable[_Union[_environment_pb2.Action, _Mapping]]] = ..., residual_actions: _Optional[_Iterable[_Union[_environment_pb2.Action, _Mapping]]] = ...) -> None: ...
+    reflex_parameters: _containers.RepeatedCompositeFieldContainer[ReflexParameter]
+    def __init__(self, actions: _Optional[_Iterable[_Union[_environment_pb2.Action, _Mapping]]] = ..., policy_version: _Optional[int] = ..., fly_base_actions: _Optional[_Iterable[_Union[_environment_pb2.Action, _Mapping]]] = ..., residual_actions: _Optional[_Iterable[_Union[_environment_pb2.Action, _Mapping]]] = ..., reflex_parameters: _Optional[_Iterable[_Union[ReflexParameter, _Mapping]]] = ...) -> None: ...
+
+class ReflexParameter(_message.Message):
+    __slots__ = ("name", "values", "min_value", "max_value", "default_value")
+    NAME_FIELD_NUMBER: _ClassVar[int]
+    VALUES_FIELD_NUMBER: _ClassVar[int]
+    MIN_VALUE_FIELD_NUMBER: _ClassVar[int]
+    MAX_VALUE_FIELD_NUMBER: _ClassVar[int]
+    DEFAULT_VALUE_FIELD_NUMBER: _ClassVar[int]
+    name: str
+    values: _containers.RepeatedScalarFieldContainer[float]
+    min_value: float
+    max_value: float
+    default_value: float
+    def __init__(self, name: _Optional[str] = ..., values: _Optional[_Iterable[float]] = ..., min_value: _Optional[float] = ..., max_value: _Optional[float] = ..., default_value: _Optional[float] = ...) -> None: ...
 
 class TrainBatchRequest(_message.Message):
     __slots__ = ("batch", "policy_version")
@@ -75,18 +91,22 @@ class HealthCheckRequest(_message.Message):
     def __init__(self) -> None: ...
 
 class HealthCheckResponse(_message.Message):
-    __slots__ = ("ready", "policy_version", "training_step", "device", "model_name")
+    __slots__ = ("ready", "policy_version", "training_step", "device", "model_name", "controller_type", "active_model_name")
     READY_FIELD_NUMBER: _ClassVar[int]
     POLICY_VERSION_FIELD_NUMBER: _ClassVar[int]
     TRAINING_STEP_FIELD_NUMBER: _ClassVar[int]
     DEVICE_FIELD_NUMBER: _ClassVar[int]
     MODEL_NAME_FIELD_NUMBER: _ClassVar[int]
+    CONTROLLER_TYPE_FIELD_NUMBER: _ClassVar[int]
+    ACTIVE_MODEL_NAME_FIELD_NUMBER: _ClassVar[int]
     ready: bool
     policy_version: int
     training_step: int
     device: str
     model_name: str
-    def __init__(self, ready: _Optional[bool] = ..., policy_version: _Optional[int] = ..., training_step: _Optional[int] = ..., device: _Optional[str] = ..., model_name: _Optional[str] = ...) -> None: ...
+    controller_type: str
+    active_model_name: str
+    def __init__(self, ready: _Optional[bool] = ..., policy_version: _Optional[int] = ..., training_step: _Optional[int] = ..., device: _Optional[str] = ..., model_name: _Optional[str] = ..., controller_type: _Optional[str] = ..., active_model_name: _Optional[str] = ...) -> None: ...
 
 class SaveCheckpointRequest(_message.Message):
     __slots__ = ()
@@ -101,3 +121,27 @@ class SaveCheckpointResponse(_message.Message):
     policy_version: int
     training_step: int
     def __init__(self, model_name: _Optional[str] = ..., policy_version: _Optional[int] = ..., training_step: _Optional[int] = ...) -> None: ...
+
+class RecordEpisodeResultRequest(_message.Message):
+    __slots__ = ("episode_id", "success", "episode_reward")
+    EPISODE_ID_FIELD_NUMBER: _ClassVar[int]
+    SUCCESS_FIELD_NUMBER: _ClassVar[int]
+    EPISODE_REWARD_FIELD_NUMBER: _ClassVar[int]
+    episode_id: str
+    success: bool
+    episode_reward: float
+    def __init__(self, episode_id: _Optional[str] = ..., success: _Optional[bool] = ..., episode_reward: _Optional[float] = ...) -> None: ...
+
+class RecordEpisodeResultResponse(_message.Message):
+    __slots__ = ("stop_training", "completed_episodes", "rolling_success_rate", "consecutive_successes", "reason")
+    STOP_TRAINING_FIELD_NUMBER: _ClassVar[int]
+    COMPLETED_EPISODES_FIELD_NUMBER: _ClassVar[int]
+    ROLLING_SUCCESS_RATE_FIELD_NUMBER: _ClassVar[int]
+    CONSECUTIVE_SUCCESSES_FIELD_NUMBER: _ClassVar[int]
+    REASON_FIELD_NUMBER: _ClassVar[int]
+    stop_training: bool
+    completed_episodes: int
+    rolling_success_rate: float
+    consecutive_successes: int
+    reason: str
+    def __init__(self, stop_training: _Optional[bool] = ..., completed_episodes: _Optional[int] = ..., rolling_success_rate: _Optional[float] = ..., consecutive_successes: _Optional[int] = ..., reason: _Optional[str] = ...) -> None: ...

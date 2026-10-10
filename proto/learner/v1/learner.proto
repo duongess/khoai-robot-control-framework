@@ -20,6 +20,18 @@ message PredictBatchResponse {
   // three-dimensional command stored in replay and consumed by the critic.
   repeated Action fly_base_actions = 3;
   repeated Action residual_actions = 4;
+  // Bounded parameters of the active local reflex law. Each `values` entry
+  // aligns with the corresponding request state. This is diagnostic telemetry:
+  // `actions` remains the sole authoritative actuator command.
+  repeated ReflexParameter reflex_parameters = 5;
+}
+
+message ReflexParameter {
+  string name = 1;
+  repeated float values = 2;
+  float min_value = 3;
+  float max_value = 4;
+  float default_value = 5;
 }
 
 message TrainBatchRequest {
@@ -53,6 +65,12 @@ message HealthCheckResponse {
   string device = 4;
   // Empty when this process is a new, unsaved learner.
   string model_name = 5;
+  // Immutable architecture selected when the learner process starts. A
+  // dashboard may display this value but must never use it to select an actor.
+  string controller_type = 6;
+  // Human-readable architecture label for operator telemetry, for example
+  // "Parametric MLP (Dense)" or "Fly Connectome (Sparse)".
+  string active_model_name = 7;
 }
 
 // SaveCheckpoint persists the complete SAC training state under the learner's
@@ -68,9 +86,27 @@ message SaveCheckpointResponse {
   uint64 training_step = 3;
 }
 
+// Report one completed environment episode when it happens. Replay samples
+// cannot be used for stopping because terminal transitions are sampled late
+// and may never be sampled at all.
+message RecordEpisodeResultRequest {
+  string episode_id = 1;
+  bool success = 2;
+  float episode_reward = 3;
+}
+
+message RecordEpisodeResultResponse {
+  bool stop_training = 1;
+  uint64 completed_episodes = 2;
+  float rolling_success_rate = 3;
+  uint64 consecutive_successes = 4;
+  string reason = 5;
+}
+
 service LearnerService {
   rpc PredictBatch(PredictBatchRequest) returns (PredictBatchResponse);
   rpc TrainBatch(TrainBatchRequest) returns (TrainBatchResponse);
   rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
   rpc SaveCheckpoint(SaveCheckpointRequest) returns (SaveCheckpointResponse);
+  rpc RecordEpisodeResult(RecordEpisodeResultRequest) returns (RecordEpisodeResultResponse);
 }

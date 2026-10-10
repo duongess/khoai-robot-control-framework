@@ -43,7 +43,7 @@ def load_checkpoint(path: Path) -> dict[str, Any]:
     """
     try:
         payload = torch.load(path, map_location="cpu", weights_only=True)
-    except (OSError, RuntimeError, ValueError, pickle.UnpicklingError) as error:
+    except (OSError, RuntimeError, ValueError, pickle.UnpicklingError, EOFError) as error:
         raise ValueError(f"could not load checkpoint {path.name}: {error}") from error
     if not isinstance(payload, dict) or payload.get("format_version") != CHECKPOINT_FORMAT_VERSION:
         raise ValueError(f"checkpoint {path.name} has an unsupported format")

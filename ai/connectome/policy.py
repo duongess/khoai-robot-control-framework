@@ -91,6 +91,8 @@ class FlyConnectomePolicy(nn.Module):
 
         self.observation_dim = observation_dim
         self.action_dim = action_dim
+        self.context_dim = hidden_dim
+        self.parametric_action_stream = "base"
         self.node_count = graph.node_count
         self.propagation_steps = propagation_steps
         self.action_dead_zone = action_dead_zone
@@ -103,6 +105,28 @@ class FlyConnectomePolicy(nn.Module):
         self.register_buffer("adjacency", graph.torch_adjacency())
         self.register_buffer("base_edge_weights", torch.tensor(graph.weights, dtype=torch.float32))
         self.register_buffer("edge_indices", torch.tensor(graph.edge_index[[1, 0]], dtype=torch.long))
+
+        # Keep the original COO buffers above for checkpoint compatibility, but
+        # derive an immutable CSR topology once. Parallel edges map to the same
+        # CSR value and are summed with index_add() during training. This avoids
+        # rebuilding and coalescing a COO tensor on every propagation.
+        linear_edge_indices = self.edge_indices[0] * graph.node_count + self.edge_indices[1]
+        unique_edges, csr_value_indices = torch.unique(
+            linear_edge_indices,
+            sorted=True,
+            return_inverse=True,
+        )
+        csr_rows = torch.div(unique_edges, graph.node_count, rounding_mode="floor")
+        csr_columns = torch.remainder(unique_edges, graph.node_count)
+        row_counts = torch.bincount(csr_rows, minlength=graph.node_count)
+        csr_crow_indices = torch.zeros(graph.node_count + 1, dtype=torch.long)
+        csr_crow_indices[1:] = torch.cumsum(row_counts, dim=0)
+        self.register_buffer("_csr_crow_indices", csr_crow_indices, persistent=False)
+        self.register_buffer("_csr_col_indices", csr_columns, persistent=False)
+        self.register_buffer("_csr_value_indices", csr_value_indices, persistent=False)
+        # Published actors are immutable eval-mode snapshots. Their fully
+        # weighted adjacency can therefore be cached after its first inference.
+        self.register_buffer("_inference_adjacency", None, persistent=False)
         self.register_buffer("sensory_indices", torch.tensor(sensory_indices, dtype=torch.long))
         self.sensory_encoder = nn.Sequential(nn.Linear(observation_dim, hidden_dim), nn.Tanh(), nn.Linear(hidden_dim, len(sensory_indices)))
         self.neuron_bias = nn.Parameter(torch.zeros(graph.node_count))
@@ -131,11 +155,13 @@ class FlyConnectomePolicy(nn.Module):
             nn.ReLU(),
             nn.Linear(hidden_dim, action_dim),
         )
-        # Warmup starts from a neutral residual mean. Fixed Gaussian sampling
-        # still explores while SAC first teaches the deterministic fly base.
-        nn.init.zeros_(self.residual_head[-1].weight)
+        # Start with a small, directionally rich residual readout so the actor
+        # explores instead of collapsing to a neutral output while the fly-base
+        # controller is still converging. The downward prior is applied only when
+        # the gripper is airborne so the zero-state initialization remains neutral.
+        nn.init.orthogonal_(self.residual_head[-1].weight, gain=0.01)
         nn.init.zeros_(self.residual_head[-1].bias)
-        self.log_std = nn.Parameter(torch.full((action_dim,), -1.0))
+        self.log_std = nn.Parameter(torch.full((action_dim,), -0.5))
         self.register_buffer("action_limits", torch.tensor([max_horizontal_speed, max_vertical_speed, max_gripper_command], dtype=torch.float32))
         self.register_buffer("residual_alpha", torch.tensor(residual_alpha, dtype=torch.float32))
         self.register_buffer("tactile_observation_indices", torch.tensor(tactile_observation_indices, dtype=torch.long))
@@ -174,6 +200,10 @@ class FlyConnectomePolicy(nn.Module):
         channels = self._apply_motor_decoder_heads(channels, observation)
         return self.latent_projection(channels)
 
+    def _policy_context(self, observation: torch.Tensor) -> torch.Tensor:
+        """Return the context consumed by the shared parametric-reflex head."""
+        return self._connectome_latent(observation)
+
     def _closed_loop_base_reflex(self, observation: torch.Tensor) -> torch.Tensor:
         """Closed-loop fly-base control for spatial tracking and stable grasping.
 
@@ -199,6 +229,19 @@ class FlyConnectomePolicy(nn.Module):
         attached = observation[:, 15] > 0.5 if observation.shape[1] > 15 else torch.zeros_like(dx, dtype=torch.bool, device=observation.device)
         contact = observation[:, 20] > 0.5 if observation.shape[1] > 20 else torch.zeros_like(dx, dtype=torch.bool, device=observation.device)
 
+        # The nominal control law f(x) should be an attractive proportional
+        # tracker that drives the carriage toward the target. In this task's
+        # sign convention, the applied action is the negative error term so a
+        # higher carriage or gripper than the target drives toward the lower
+        # left/down direction expected by the environment.
+        nominal_error_x = dx
+        nominal_error_y = dy
+        if observation.shape[1] > 8:
+            target_error_x = observation[:, 0] - observation[:, 8]
+            target_error_y = observation[:, 1] - observation[:, 9]
+            nominal_error_x = torch.where(torch.abs(target_error_x) > 1e-6, target_error_x, nominal_error_x)
+            nominal_error_y = torch.where(torch.abs(target_error_y) > 1e-6, target_error_y, nominal_error_y)
+
         # The fly-base policy must be stateless and recompute a fresh control
         # signal from the live observation on every step. Index 10 is the signed
         # displacement err_x = normalize(CarriageX - ObjectX).
@@ -206,7 +249,7 @@ class FlyConnectomePolicy(nn.Module):
         # carriage must drive positive X. Positive err_x means the object is to the
         # left, so the carriage must drive negative X. No module-level latch or
         # threshold freeze is allowed.
-        err_x = observation[:, 10]
+        err_x = nominal_error_x
         err_target_x = observation[:, 12] if observation.shape[1] > 12 else torch.zeros_like(err_x)
         gripper_y = observation[:, 1]
         carry_height_ready = gripper_y > torch.tensor(0.50, dtype=observation.dtype, device=observation.device)
@@ -239,11 +282,16 @@ class FlyConnectomePolicy(nn.Module):
 
         x_track = -torch.clamp(gain_x * err_x, min=-1.0, max=1.0)
 
-        # Only descend once the carriage is already horizontally close enough to
-        # the object. If the lateral error is still large, keep the gripper level and
-        # drive horizontally first.
-        descent_gate = torch.abs(err_x) < torch.tensor(0.15, dtype=observation.dtype, device=observation.device)
-        y_track = torch.where(descent_gate & ~attached, torch.full_like(err_x, -0.5), torch.zeros_like(err_x))
+        # Only descend once the carriage is already nearly centered over the
+        # object. A small trim error can still be corrected while approaching, but
+        # the nominal descent must not start while the gripper is laterally offset
+        # and the controller is still trying to center the carriage.
+        descent_gate = torch.abs(err_x) < torch.tensor(0.03, dtype=observation.dtype, device=observation.device)
+        fine_trim_gate = torch.abs(err_x) <= torch.tensor(0.10, dtype=observation.dtype, device=observation.device)
+        nominal_y_track = -torch.clamp(1.5 * nominal_error_y, min=-1.0, max=1.0)
+        lateral_trim = torch.where(fine_trim_gate, -torch.clamp(2.0 * err_x, min=-1.0, max=1.0), torch.zeros_like(err_x))
+        y_track = torch.where(descent_gate & ~attached, nominal_y_track, torch.zeros_like(err_x))
+        y_track = torch.where(~descent_gate & ~attached & fine_trim_gate, lateral_trim, y_track)
 
         # Post-grasp reflex cascade: lift first while attached but still below the
         # safe carry height, then transport horizontally to the target while holding
@@ -296,6 +344,14 @@ class FlyConnectomePolicy(nn.Module):
         ]
         tactile = torch.stack(tactile_columns, dim=1)
         residual_mean = self.residual_head(torch.cat((latent, tactile), dim=1))
+        if observation.shape[1] > 1:
+            airborne_descent = torch.where(
+                observation[:, 1] > torch.tensor(0.5, dtype=observation.dtype, device=observation.device),
+                torch.full_like(residual_mean[:, 1], -0.15),
+                torch.zeros_like(residual_mean[:, 1]),
+            )
+            residual_mean = residual_mean.clone()
+            residual_mean[:, 1] = residual_mean[:, 1] + airborne_descent
         log_std = self.log_std.clamp(self.min_log_std, 2).expand_as(residual_mean)
         distribution = Normal(residual_mean, log_std.exp())
         raw_residual = residual_mean if deterministic else distribution.rsample()
@@ -369,9 +425,24 @@ class FlyConnectomePolicy(nn.Module):
         return actions.clamp(-1.0, 1.0)
 
     def _weighted_adjacency(self) -> torch.Tensor:
-        values = self.base_edge_weights * torch.exp(self.edge_log_gains.clamp(-4, 4))
-        # Sparse coalescing handles parallel edges while preserving source->target.
-        return torch.sparse_coo_tensor(self.edge_indices, values, self.adjacency.shape, device=values.device, check_invariants=False).coalesce()
+        if not self.training and self._inference_adjacency is not None:
+            return self._inference_adjacency
+
+        edge_values = self.base_edge_weights * torch.exp(self.edge_log_gains.clamp(-4, 4))
+        csr_values = edge_values.new_zeros(self._csr_col_indices.numel())
+        csr_values = csr_values.index_add(0, self._csr_value_indices, edge_values)
+        adjacency = torch.sparse_csr_tensor(
+            self._csr_crow_indices,
+            self._csr_col_indices,
+            csr_values,
+            size=self.adjacency.shape,
+            dtype=csr_values.dtype,
+            device=csr_values.device,
+            check_invariants=False,
+        )
+        if not self.training and not torch.is_grad_enabled():
+            self._inference_adjacency = adjacency.detach()
+        return adjacency
 
 
 class RandomGraphPolicy(FlyConnectomePolicy):

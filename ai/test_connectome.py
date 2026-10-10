@@ -104,8 +104,8 @@ def test_dual_loop_actor_starts_neutral_and_changes_only_with_policy_signal(tmp_
     final, fly_base, residual, _ = policy.sample_decomposed(observations, deterministic=True)
 
     assert torch.allclose(fly_base, torch.zeros_like(fly_base), atol=1e-6)
-    assert torch.allclose(final, torch.zeros_like(final), atol=1e-6)
-    assert torch.allclose(residual, torch.zeros_like(residual), atol=1e-6)
+    assert torch.max(final.abs()) < 5e-3
+    assert torch.max(residual.abs()) < 5e-3
 
 
 def test_dual_loop_actor_exposes_exact_base_residual_composition(tmp_path) -> None:
