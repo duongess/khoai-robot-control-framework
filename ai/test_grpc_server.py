@@ -24,8 +24,8 @@ def test_health_and_batched_prediction_use_configured_dimensions():
     assert all(-1 <= value <= 1 for action in response.actions for value in action.values)
     health = servicer.HealthCheck(learner_pb2.HealthCheckRequest(), AbortContext())
     assert health.ready
-    assert health.controller_type == "mlp"
-    assert health.active_model_name == "SAC MLP (Dense)"
+    assert health.controller_type == "model_free"
+    assert health.active_model_name == "Model-Free SAC (Dense Baseline)"
 
 
 def test_active_model_name_reports_process_selected_architecture():
@@ -132,7 +132,7 @@ def test_checkpoint_round_trip_restores_complete_sac_training_state(tmp_path: Pa
 
 
 def test_checkpoint_cannot_replace_the_process_selected_controller(tmp_path: Path):
-    dense = LearnerConfig(state_dim=3, action_dim=3, checkpoint_dir=str(tmp_path), controller_type="mlp")
+    dense = LearnerConfig(state_dim=3, action_dim=3, checkpoint_dir=str(tmp_path), controller_type="model_free")
     LearnerServicer(dense, model_name="dense-v1").SaveCheckpoint(learner_pb2.SaveCheckpointRequest(), AbortContext())
 
     parametric = LearnerConfig(state_dim=3, action_dim=3, checkpoint_dir=str(tmp_path), controller_type="parametric_mlp")

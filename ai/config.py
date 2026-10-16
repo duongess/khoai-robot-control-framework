@@ -24,7 +24,7 @@ class SACConfig:
     learning_rate: float = 3e-4
     target_entropy: float = -3.0
     seed: int = 0
-    controller_type: str = "mlp"
+    controller_type: str = "model_free"
     # connectome uses the graph motor readout as the nominal action; closed_loop is the legacy geometry baseline.
     base_policy: str = "connectome"
     graph_path: str | None = None
@@ -71,11 +71,13 @@ class SACConfig:
             raise ValueError("action dimension must be positive")
         if not 0 < self.gamma < 1:
             raise ValueError("gamma must be in (0, 1)")
-        if self.controller_type not in {"mlp", "parametric_mlp", "fly_connectome", "random_graph"}:
-            raise ValueError("controller_type must be mlp, parametric_mlp, fly_connectome, or random_graph")
-        if self.base_policy not in {"connectome", "closed_loop"}:
-            raise ValueError("base_policy must be connectome or closed_loop")
-        graph_controller = self.controller_type in {"fly_connectome", "random_graph"}
+        if self.controller_type not in {"model_free", "heuristic_guided", "parametric_mlp", "fly_connectome"}:
+            raise ValueError("controller_type must be model_free, heuristic_guided, parametric_mlp, or fly_connectome")
+        if self.base_policy not in {"connectome", "closed_loop", "scripted_phases"}:
+            raise ValueError("base_policy must be connectome, closed_loop, or scripted_phases")
+        if self.controller_type == "heuristic_guided" and self.base_policy != "scripted_phases":
+            raise ValueError("heuristic_guided requires base_policy=scripted_phases")
+        graph_controller = self.controller_type == "fly_connectome"
         if graph_controller and not self.graph_path:
             raise ValueError("graph_path is required for graph controllers")
         if self.graph_path and graph_controller and not Path(self.graph_path).is_file():
@@ -119,7 +121,7 @@ class LearnerConfig:
     # different observation schema than the gRPC process.
     state_dim: int = 30
     action_dim: int = 3
-    controller_type: str = "mlp"
+    controller_type: str = "model_free"
     base_policy: str = "connectome"
     graph_path: str | None = None
     propagation_steps: int = 4
@@ -177,10 +179,12 @@ class LearnerConfig:
             raise ValueError("log_every_n_requests must be positive")
         if not self.checkpoint_dir.strip():
             raise ValueError("checkpoint_dir must not be empty")
-        if self.controller_type not in {"mlp", "parametric_mlp", "fly_connectome", "random_graph"}:
-            raise ValueError("controller_type must be mlp, parametric_mlp, fly_connectome, or random_graph")
-        if self.base_policy not in {"connectome", "closed_loop"}:
-            raise ValueError("base_policy must be connectome or closed_loop")
+        if self.controller_type not in {"model_free", "heuristic_guided", "parametric_mlp", "fly_connectome"}:
+            raise ValueError("controller_type must be model_free, heuristic_guided, parametric_mlp, or fly_connectome")
+        if self.base_policy not in {"connectome", "closed_loop", "scripted_phases"}:
+            raise ValueError("base_policy must be connectome, closed_loop, or scripted_phases")
+        if self.controller_type == "heuristic_guided" and self.base_policy != "scripted_phases":
+            raise ValueError("heuristic_guided requires base_policy=scripted_phases")
         if self.full_actor_unlock_step < 0:
             raise ValueError("full_actor_unlock_step must be non-negative")
         if any(value < 0 or value > 1 for value in (self.residual_alpha_x, self.residual_alpha_y, self.residual_alpha_grip)):
@@ -195,7 +199,7 @@ class LearnerConfig:
             self.vertical_acceleration_observation_index,
             self.previous_vertical_action_observation_index,
         )
-        graph_controller = self.controller_type in {"fly_connectome", "random_graph"}
+        graph_controller = self.controller_type == "fly_connectome"
         if graph_controller and any(index < 0 or index >= self.state_dim for index in tactile_indices):
             raise ValueError("dual-loop tactile observation indices must be within state_dim")
         if self.phase_gated_decoder:
@@ -213,9 +217,9 @@ class LearnerConfig:
     def from_environment(cls, *, controller_type_override: str | None = None) -> "LearnerConfig":
         try:
             graph_path = os.environ.get("LEARNER_GRAPH_PATH")
-            controller_type = controller_type_override or os.environ.get("LEARNER_CONTROLLER", "mlp")
-            graph_controller = controller_type in {"fly_connectome", "random_graph"}
-            default_phase_gating = "true" if controller_type in {"fly_connectome", "random_graph"} else "false"
+            controller_type = controller_type_override or os.environ.get("LEARNER_CONTROLLER", "model_free")
+            graph_controller = controller_type == "fly_connectome"
+            default_phase_gating = "true" if controller_type == "fly_connectome" else "false"
             # A CLI architecture selection must not be invalidated by an old
             # exported phase-gating variable from a previous graph run.
             phase_gated_decoder = graph_controller if controller_type_override is not None else os.environ.get("LEARNER_PHASE_GATED_DECODER", default_phase_gating).lower() == "true"
@@ -223,7 +227,10 @@ class LearnerConfig:
                 state_dim=int(os.environ.get("LEARNER_STATE_DIM", "30")),
                 action_dim=int(os.environ.get("LEARNER_ACTION_DIM", "3")),
                 controller_type=controller_type,
-                base_policy=os.environ.get("LEARNER_BASE_POLICY", "connectome" if graph_controller else "closed_loop"),
+                base_policy=os.environ.get(
+                    "LEARNER_BASE_POLICY",
+                    "connectome" if graph_controller else "scripted_phases" if controller_type == "heuristic_guided" else "closed_loop",
+                ),
                 graph_path=graph_path,
                 propagation_steps=int(os.environ.get("LEARNER_PROPAGATION_STEPS", "4")),
                 train_edge_gains=os.environ.get("LEARNER_TRAIN_EDGE_GAINS", "true").lower() == "true",

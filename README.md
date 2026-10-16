@@ -5,7 +5,7 @@ This repository provides a generic Go environment runtime and a localhost Python
 ## Connectome-constrained controller
 
 The learner can use `mlp` (a direct-action Gaussian actor), `parametric_mlp`
-(dense SAC over the six bounded coefficients of `f(x; theta)`), `random_graph`
+(dense SAC over the six bounded coefficients of `f(x; theta)`), `heuristic_guided`
 (a degree-preserving random topology baseline), or `fly_connectome` (a fruit-fly
 **connectome-inspired**, directed sparse graph actor).
 
@@ -49,8 +49,11 @@ The checked-in `.env.example` contains only `NEUPRINT_TOKEN=your_token_here`. `.
 `configs/fly_connectome.yaml` documents controller fields. The gRPC service reads equivalent environment variables, preserving its wire protocol and public Go APIs:
 
 ```bash
-# MLP baseline (default)
-LEARNER_CONTROLLER=mlp poetry run python -m ai
+# Model-free SAC baseline (default; formerly `mlp`)
+LEARNER_CONTROLLER=model_free LEARNER_BASE_POLICY=closed_loop poetry run python -m ai
+
+# Factory scripted phases with SAC residual corrections
+LEARNER_CONTROLLER=heuristic_guided LEARNER_BASE_POLICY=scripted_phases poetry run python -m ai
 
 # Dense standalone SAC + f(x); use the frontend's pure_rl control mode.
 LEARNER_CONTROLLER=parametric_mlp poetry run python -m ai
@@ -67,8 +70,6 @@ LEARNER_TRANSPORT_PHASE_THRESHOLD=0.0 \
 LEARNER_ACTION_DEAD_ZONE=0.001 LEARNER_MAX_HORIZONTAL_SPEED=0.2 \
 LEARNER_MAX_VERTICAL_SPEED=0.2 poetry run python -m ai
 
-# Same graph size, edge count, in-degree, and out-degree baseline
-LEARNER_CONTROLLER=random_graph LEARNER_GRAPH_PATH=data/connectome/connectome_graph.npz poetry run python -m ai
 ```
 
 For a responsive local dashboard, the learner defaults to one PyTorch compute
