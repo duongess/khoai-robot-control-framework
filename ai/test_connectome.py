@@ -368,13 +368,13 @@ def test_graph_actor_trains_one_sac_step_without_neuprint(tmp_path) -> None:
     assert all(np.isfinite(value) for value in metrics.values())
 
 
-def test_random_graph_preserves_node_and_edge_counts(tmp_path) -> None:
+def test_graph_randomization_preserves_node_and_edge_counts(tmp_path) -> None:
     graph = _graph(tmp_path)
-    random_graph = graph.randomized(seed=9)
-    assert random_graph.node_count == graph.node_count
-    assert random_graph.edge_count == graph.edge_count
-    assert np.array_equal(np.bincount(random_graph.edge_index[0], minlength=8), np.bincount(graph.edge_index[0], minlength=8))
-    assert np.array_equal(np.bincount(random_graph.edge_index[1], minlength=8), np.bincount(graph.edge_index[1], minlength=8))
+    randomized = graph.randomized(seed=9)
+    assert randomized.node_count == graph.node_count
+    assert randomized.edge_count == graph.edge_count
+    assert np.array_equal(np.bincount(randomized.edge_index[0], minlength=8), np.bincount(graph.edge_index[0], minlength=8))
+    assert np.array_equal(np.bincount(randomized.edge_index[1], minlength=8), np.bincount(graph.edge_index[1], minlength=8))
 
 
 def test_connectome_decoder_only_training_unlocks_after_stability_window(tmp_path) -> None:

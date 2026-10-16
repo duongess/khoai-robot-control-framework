@@ -42,10 +42,10 @@ MAX_TRAINING_EPISODES = 150
 EARLY_STOP_MESSAGE = "[EARLY STOPPING TRIGGERED] Target achieved. Model locked at peak performance. Ready for evaluation."
 
 ACTIVE_MODEL_NAMES = {
-    "mlp": "SAC MLP (Dense)",
+    "model_free": "Model-Free SAC (Dense Baseline)",
+    "heuristic_guided": "Heuristic-Guided SAC (Scripted Phases)",
     "parametric_mlp": "Parametric MLP (Dense)",
     "fly_connectome": "Fly Connectome (Sparse)",
-    "random_graph": "Random Graph (Sparse)",
 }
 
 
@@ -177,7 +177,7 @@ class LearnerServicer(learner_pb2_grpc.LearnerServiceServicer):
         # A new parametric learner must publish its registered six-coefficient
         # reflex before the first immutable actor snapshot is created.
         # Checkpoints restore their own persisted schema in _restore_checkpoint.
-        if payload is None and self._config.controller_type in {"parametric_mlp", "fly_connectome", "random_graph"}:
+        if payload is None and self._config.controller_type in {"parametric_mlp", "fly_connectome"}:
             self._agent.register_reflex_law(DEFAULT_GANTRY_REFLEX_CONFIG)
         self._samples_seen = 0
         # Version zero is reserved by the protocol for "latest". Every actual
@@ -206,13 +206,13 @@ class LearnerServicer(learner_pb2_grpc.LearnerServiceServicer):
         self._early_stopped = False
         self._stop_reason = ""
         self._last_metrics = self._empty_metrics()
-        if self._config.controller_type in {"fly_connectome", "random_graph"}:
+        if self._config.controller_type == "fly_connectome":
             self._re_enable_connectome_gradients()
         if payload is not None:
             self._restore_checkpoint(payload, checkpoint)
             # Legacy checkpoints predate the registry. Upgrade them at boot
             # rather than serving an actor with no parameter-space reflex.
-            if self._config.controller_type in {"parametric_mlp", "fly_connectome", "random_graph"}:
+            if self._config.controller_type in {"parametric_mlp", "fly_connectome"}:
                 if not self._agent.actor.reflex_parameter_count:
                     self._agent.register_reflex_law(DEFAULT_GANTRY_REFLEX_CONFIG)
                     self._actor_snapshots = {self._policy_version: deepcopy(self._agent.actor).eval()}

@@ -10,8 +10,8 @@ from torch.nn import functional as functional
 
 from ai.config import SACConfig
 from ai.connectome.graph import ConnectomeGraph
-from ai.connectome.policy import FlyConnectomePolicy, RandomGraphPolicy
-from ai.networks import Critic, GaussianActor, ParametricMLPPolicy
+from ai.connectome.policy import FlyConnectomePolicy
+from ai.networks import Critic, GaussianActor, HeuristicGuidedPolicy, ParametricMLPPolicy
 
 
 @dataclass
@@ -49,7 +49,7 @@ class SACAgent:
     def register_reflex_law(self, config_dict: dict[str, Any]) -> dict[str, Any]:
         """Switch a compatible actor to parameter-space SAC for a registered law."""
         if not isinstance(self.actor, (FlyConnectomePolicy, ParametricMLPPolicy)):
-            raise ValueError("Parametric SAC requires a parametric_mlp, fly_connectome, or random_graph actor")
+            raise ValueError("Parametric SAC requires a parametric_mlp or fly_connectome actor")
         registered = self.actor.register_reflex_law(config_dict)
         # The parameter head changes shape, so retain no stale optimizer slots.
         self.actor_optimizer = self._build_actor_optimizer()
@@ -141,7 +141,7 @@ class SACAgent:
     def _build_actor_optimizer(self) -> torch.optim.Optimizer:
         if getattr(self.actor, "reflex_parameter_count", 0):
             return torch.optim.Adam(self.actor.parameters(), lr=self.config.learning_rate)
-        if self.config.controller_type not in {"fly_connectome", "random_graph"}:
+        if self.config.controller_type != "fly_connectome":
             return torch.optim.Adam(self.actor.parameters(), lr=self.config.learning_rate)
         residual_parameters = list(self.actor.residual_head.parameters()) + [self.actor.log_std]
         residual_ids = {id(parameter) for parameter in residual_parameters}
@@ -261,8 +261,10 @@ class SACAgent:
 
     @staticmethod
     def _build_actor(config: SACConfig) -> nn.Module:
-        if config.controller_type == "mlp":
+        if config.controller_type == "model_free":
             return GaussianActor(config.state_dim, config.action_dim, config.hidden_dim, config.min_log_std)
+        if config.controller_type == "heuristic_guided":
+            return HeuristicGuidedPolicy(config.state_dim, config.action_dim, config.hidden_dim, config.min_log_std)
         if config.controller_type == "parametric_mlp":
             return ParametricMLPPolicy(config.state_dim, config.action_dim, config.hidden_dim, config.min_log_std)
         graph = ConnectomeGraph.load(config.graph_path or "")
@@ -293,9 +295,6 @@ class SACAgent:
                 config.previous_vertical_action_observation_index,
             ),
         )
-        if config.controller_type == "random_graph":
-            return RandomGraphPolicy(**arguments, seed=config.seed)
-            
         return FlyConnectomePolicy(**arguments)
 
     def _prepare_batch(self, batch: TensorBatch) -> tuple[torch.Tensor, ...]:

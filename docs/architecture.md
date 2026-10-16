@@ -4,7 +4,7 @@ The Go runtime owns task lifecycle (`Reset`, batched `Step`), replay, and the gR
 
 The SAC critic remains an MLP. The actor is selected at startup: direct-action
 `mlp`, dense six-parameter `parametric_mlp`, sparse degree-preserving
-`random_graph`, or sparse directed `fly_connectome` loaded from a local neuPrint
+`heuristic_guided`, or sparse directed `fly_connectome` loaded from a local neuPrint
 cache. Both parametric actors produce the complete bounded vector
 `theta = [a_x, b_x, a_y, b_y, a_g, b_g]` before evaluating the registered reflex;
 the dense actor uses its MLP context and the graph actor uses its connectome
